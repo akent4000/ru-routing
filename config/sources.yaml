@@ -1,0 +1,68 @@
+sources:
+  - name: hydraponique/roscomvpn-geoip
+    url: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
+    input_type: geoip_dat
+    required: true
+    expected_categories: [ru]
+    attribution: hydraponique/roscomvpn-geoip contributors
+    license:
+      spdx: GPL-3.0-only
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+  - name: aireps/geosite
+    url: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+    input_type: geosite_dat
+    required: true
+    expected_categories: [category-ru, category-ads-all, category-tracker, category-malware, category-phishing, category-cryptominers, category-google, category-youtube, category-telegram, category-discord, category-meta, category-github, category-streaming, category-ai]
+    attribution: aireps/geosite, synchronized from v2fly/domain-list-community
+    license:
+      spdx: MIT
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+      max_sync_lag_hours: 48
+  - name: runetfreedom/russia-v2ray-rules-dat
+    url: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+    input_type: geosite_dat
+    required: true
+    expected_categories: [ru-blocked, ru-inside, ru-outside, ru]
+    attribution: runetfreedom/russia-v2ray-rules-dat contributors
+    license:
+      spdx: GPL-3.0-only
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+  - name: jutsu-dev/ru-route-lists
+    url: https://github.com/jutsu-dev/ru-route-lists
+    input_type: plain_text
+    required: true
+    expected_categories: [blocked-domains, blocked-cidrs]
+    attribution: jutsu-dev/ru-route-lists contributors
+    license:
+      spdx: MIT
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+  - name: itdoginfo/allow-domains
+    url: https://github.com/itdoginfo/allow-domains
+    input_type: plain_text
+    required: true
+    expected_categories: [inside, outside, services]
+    attribution: itdoginfo/allow-domains contributors
+    license:
+      spdx: MIT
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+  - name: Loyalsoldier/v2ray-rules-dat
+    url: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+    input_type: geoip_dat
+    required: true
+    expected_categories: [geoip-ru, geoip-global]
+    attribution: Loyalsoldier/v2ray-rules-dat contributors
+    license:
+      spdx: GPL-3.0-only
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48

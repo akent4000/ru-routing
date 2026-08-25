@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+
+from .config import ConfigError, load_policy, load_registry, load_thresholds
 
 COMMANDS = ("fetch", "build", "check", "publish", "rollback")
 
@@ -15,7 +18,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ru-routing")
     subcommands = parser.add_subparsers(dest="command", title="pipeline commands")
     for command in COMMANDS:
-        subcommands.add_parser(command, help=f"{command} routing pipeline data")
+        command_parser = subcommands.add_parser(
+            command, help=f"{command} routing pipeline data"
+        )
+        if command == "check":
+            command_parser.add_argument(
+                "--config-only",
+                action="store_true",
+                help="validate policy configuration",
+            )
     return parser
 
 
@@ -29,6 +40,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(error.code)
     if arguments.command is None:
         parser.print_help()
+        return 0
+    if arguments.command == "check" and arguments.config_only:
+        try:
+            registry = load_registry(Path("config/sources.yaml"))
+            policy = load_policy(Path("config/categories.yaml"))
+            load_thresholds(Path("config/thresholds.yaml"))
+            if set(policy.source_categories) != registry.declared_category_keys():
+                raise ConfigError(
+                    "source registry and category policy do not map the same keys"
+                )
+        except ConfigError as error:
+            print(f"ru-routing: invalid configuration: {error}", file=sys.stderr)
+            return 2
+        print("ru-routing: configuration is valid")
         return 0
 
     print(f"ru-routing: error: {arguments.command} is not wired yet", file=sys.stderr)
