@@ -1,0 +1,4 @@
+# copied upstream comments are ignored
+Example.COM.
+ПРИМЕР.РФ
+

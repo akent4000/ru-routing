@@ -1,0 +1,5 @@
+# domain-list-community fixture
+full:exact.example @cn
+domain:suffix.example @attr
+keyword:needle
+regexp:^api\.example\.com$
