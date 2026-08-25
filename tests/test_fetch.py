@@ -1,0 +1,264 @@
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import httpx
+import pytest
+
+from ru_routing.config import (
+    FreshnessRule,
+    LicenseMetadata,
+    SourceDefinition,
+    SourceRegistry,
+)
+from ru_routing.fetch import FetchError, fetch_all
+
+
+def source(
+    name="example/source",
+    url="https://raw.githubusercontent.com/example/source/0123456789abcdef/file.txt",
+    *,
+    layout="per_category_urls",
+    location="https://raw.githubusercontent.com/example/source/0123456789abcdef/file.txt",
+    freshness=FreshnessRule(max_age_hours=48),
+):
+    return SourceDefinition(
+        name=name,
+        url=url,
+        input_type="plain_text",
+        layout=layout,
+        required=True,
+        expected_categories=("rules",),
+        category_locations={"rules": (location,)},
+        attribution="Example contributors",
+        license=LicenseMetadata("MIT", True),
+        freshness=freshness,
+    )
+
+
+def client(handler):
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_fetches_a_pinned_raw_input_to_a_content_addressed_object_and_metadata(
+    tmp_path,
+):
+    body = b"example.test\n"
+    digest = hashlib.sha256(body).hexdigest()
+
+    def handler(request):
+        if request.url.path.endswith("/commits/0123456789abcdef"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "0123456789abcdef",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        return httpx.Response(200, content=body)
+
+    fetched = fetch_all(
+        SourceRegistry((source(),)), tmp_path / "inputs", client(handler)
+    )
+
+    assert len(fetched) == 1
+    item = fetched[0]
+    assert item.resolved_revision == "0123456789abcdef"
+    assert item.sha256 == digest
+    assert item.license.spdx == "MIT"
+    assert item.object_paths == {"rules": (tmp_path / "inputs" / "objects" / digest,)}
+    assert item.object_paths["rules"][0].read_bytes() == body
+    metadata = json.loads(
+        (tmp_path / "inputs" / "metadata" / "example--source.json").read_text()
+    )
+    assert metadata == {
+        "attribution": "Example contributors",
+        "license": {"redistribution_reviewed": True, "spdx": "MIT"},
+        "name": "example/source",
+        "objects": {"rules": [{"path": f"objects/{digest}", "sha256": digest}]},
+        "observed_freshness_lag_hours": None,
+        "observed_freshness_age_hours": 0.0,
+        "resolved_revision": "0123456789abcdef",
+        "sha256": digest,
+    }
+
+
+def test_retries_transient_server_errors_before_downloading_required_input(tmp_path):
+    attempts = 0
+    body = b"example.test\n"
+
+    def handler(request):
+        nonlocal attempts
+        if request.url.path.endswith("/commits/0123456789abcdef"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "0123456789abcdef",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(503, content=b"credential=must-not-leak")
+        return httpx.Response(200, content=body)
+
+    fetched = fetch_all(
+        SourceRegistry((source(),)), tmp_path / "inputs", client(handler)
+    )
+
+    assert attempts == 3
+    assert fetched[0].object_paths["rules"][0].read_bytes() == body
+
+
+@pytest.mark.parametrize("body", [b"", b"   \n"])
+def test_rejects_empty_required_input_without_replacing_prior_directory(tmp_path, body):
+    destination = tmp_path / "inputs"
+    destination.mkdir()
+    (destination / "previous.txt").write_text("preserve me", encoding="utf-8")
+
+    def handler(request):
+        if request.url.path.endswith("/commits/0123456789abcdef"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "0123456789abcdef",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        return httpx.Response(200, content=body)
+
+    with pytest.raises(FetchError, match="example/source"):
+        fetch_all(SourceRegistry((source(),)), destination, client(handler))
+
+    assert (destination / "previous.txt").read_text(encoding="utf-8") == "preserve me"
+
+
+def test_rejects_a_release_asset_whose_declared_checksum_does_not_match(tmp_path):
+    body = b"actual bytes"
+    metadata = {
+        "tag_name": "v1.2.3",
+        "target_commitish": "main",
+        "published_at": "2999-01-01T00:00:00Z",
+        "assets": [
+            {
+                "name": "rules.txt",
+                "browser_download_url": "https://downloads.example.test/rules.txt",
+                "digest": "sha256:" + ("0" * 64),
+            }
+        ],
+    }
+
+    def handler(request):
+        if request.url.path == "/repos/example/source/releases/latest":
+            return httpx.Response(200, json=metadata)
+        if request.url.path.endswith("/commits/main"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "abcdef",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        return httpx.Response(200, content=body)
+
+    release_source = source(
+        url="https://api.github.com/repos/example/source/releases/latest",
+        layout="release_assets",
+        location="https://github.com/example/source/releases/download/latest/rules.txt",
+    )
+
+    with pytest.raises(FetchError, match="example/source"):
+        fetch_all(
+            SourceRegistry((release_source,)), tmp_path / "inputs", client(handler)
+        )
+
+
+def test_follows_a_resolved_release_asset_redirect_before_hashing_it(tmp_path):
+    body = b"rules.example\n"
+    metadata = {
+        "tag_name": "v1.2.3",
+        "target_commitish": "main",
+        "published_at": "2999-01-01T00:00:00Z",
+        "assets": [
+            {
+                "name": "rules.txt",
+                "browser_download_url": "https://downloads.example.test/rules.txt",
+                "digest": f"sha256:{hashlib.sha256(body).hexdigest()}",
+            }
+        ],
+    }
+
+    def handler(request):
+        if request.url.path == "/repos/example/source/releases/latest":
+            return httpx.Response(200, json=metadata)
+        if request.url.path.endswith("/commits/main"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "abcdef",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        if request.url.host == "downloads.example.test":
+            return httpx.Response(
+                302, headers={"location": "https://objects.example.test/rules.txt"}
+            )
+        return httpx.Response(200, content=body)
+
+    release_source = source(
+        url="https://api.github.com/repos/example/source/releases/latest",
+        layout="release_assets",
+        location="https://github.com/example/source/releases/download/latest/rules.txt",
+    )
+
+    fetched = fetch_all(
+        SourceRegistry((release_source,)), tmp_path / "inputs", client(handler)
+    )
+
+    assert fetched[0].resolved_revision == "abcdef"
+    assert fetched[0].object_paths["rules"][0].read_bytes() == body
+
+
+def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path):
+    now = datetime.now(timezone.utc)
+    source_commit = now - timedelta(hours=72)
+    upstream_commit = now - timedelta(hours=1)
+    metadata = json.loads(
+        Path("tests/fixtures/http/aireps-metadata.json").read_text(encoding="utf-8")
+    )
+    metadata["published_at"] = now.isoformat().replace("+00:00", "Z")
+
+    def handler(request):
+        if request.url.path == "/repos/aireps/geosite/releases/latest":
+            return httpx.Response(200, json=metadata)
+        if request.url.path.endswith("/commits/main"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "aireps-commit",
+                    "commit": {"author": {"date": source_commit.isoformat()}},
+                },
+            )
+        if request.url.path == "/repos/v2fly/domain-list-community/commits":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "sha": "v2fly-commit",
+                        "commit": {"author": {"date": upstream_commit.isoformat()}},
+                    }
+                ],
+            )
+        return httpx.Response(200, content=b"geosite")
+
+    aireps = source(
+        name="aireps/geosite",
+        url="https://github.com/aireps/geosite/releases/latest/download/geosite.dat",
+        layout="single_artifact",
+        location="https://github.com/aireps/geosite/releases/latest/download/geosite.dat",
+        freshness=FreshnessRule(max_age_hours=48, max_sync_lag_hours=48),
+    )
+
+    with pytest.raises(FetchError, match="aireps/geosite"):
+        fetch_all(SourceRegistry((aireps,)), tmp_path / "inputs", client(handler))

@@ -1,0 +1,12 @@
+{
+  "tag_name": "v2026.08.25",
+  "target_commitish": "main",
+  "published_at": "2026-08-25T08:00:00Z",
+  "assets": [
+    {
+      "name": "geosite.dat",
+      "browser_download_url": "https://downloads.example.test/aireps/geosite.dat",
+      "digest": "sha256:080da7e4cc197f7afd381810036dd481ea17151e47fa346606ab8ceada6cffda"
+    }
+  ]
+}
