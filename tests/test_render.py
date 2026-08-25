@@ -5,15 +5,17 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
+import ru_routing.render as render_module
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.render import (
-    RepresentationError,
     render_dlc_sources,
     render_geoip_config,
     render_mihomo_yaml,
     render_raw,
     render_singbox_json,
+    representation_report,
 )
 from ru_routing.resolve import ConflictReport, ResolvedBuild
 
@@ -146,7 +148,67 @@ def test_render_mihomo_yaml_uses_classical_rules_for_supported_kinds():
     )
 
 
-def test_unrepresentable_high_precedence_mihomo_entry_fails_closed(tmp_path):
+def test_render_mihomo_yaml_preserves_keyword_and_regex_for_high_precedence_category():
+    pattern = r"^api\.example$"
+    category = Category(
+        "spy",
+        frozenset(
+            {
+                entry(RuleKind.DOMAIN_KEYWORD, "needle"),
+                entry(RuleKind.DOMAIN_REGEX, pattern),
+            }
+        ),
+    )
+
+    assert yaml.safe_load(render_mihomo_yaml(category)) == {
+        "payload": ["DOMAIN-KEYWORD,needle", f"DOMAIN-REGEX,{pattern}"]
+    }
+
+
+def test_render_mihomo_yaml_round_trips_yaml_significant_regex_characters():
+    pattern = r'^api: value # note "quoted" \\path$'
+    category = Category(
+        "thematic", frozenset({entry(RuleKind.DOMAIN_REGEX, pattern)})
+    )
+
+    assert yaml.safe_load(render_mihomo_yaml(category)) == {
+        "payload": [f"DOMAIN-REGEX,{pattern}"]
+    }
+
+
+def test_representation_report_distinguishes_same_category_in_lite_and_server():
+    report = representation_report(build())
+
+    records = [
+        record
+        for record in report.entries
+        if record.target == "mihomo"
+        and record.category == "blocked"
+        and record.value == "blocked.example"
+    ]
+
+    assert [record.dataset for record in records] == ["lite", "server"]
+
+
+def test_render_geoip_config_keeps_existing_file_when_atomic_replace_fails(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "geoip.json"
+    path.write_text("known-good\n", encoding="utf-8")
+
+    def reject_replace(source, destination):
+        raise OSError("simulated replacement failure")
+
+    monkeypatch.setattr(render_module.os, "replace", reject_replace)
+
+    with pytest.raises(OSError, match="simulated replacement failure"):
+        render_geoip_config(build().server, path)
+
+    assert path.read_text(encoding="utf-8") == "known-good\n"
+    assert not list(tmp_path.glob(".geoip.json.tmp-*"))
+
+
+def test_high_precedence_mihomo_regex_is_reported_as_represented(tmp_path):
     spy = Dataset(
         {
             "spy": Category(
@@ -156,8 +218,12 @@ def test_unrepresentable_high_precedence_mihomo_entry_fails_closed(tmp_path):
     )
     unsafe = ResolvedBuild(lite=spy, server=spy, conflicts=ConflictReport((), (), ()))
 
-    with pytest.raises(RepresentationError, match="mihomo.*spy.*domain_regex"):
-        render_raw(unsafe, tmp_path / "dist")
+    report = render_raw(unsafe, tmp_path / "dist")
+
+    assert all(record.represented for record in report.entries)
+    assert yaml.safe_load(render_mihomo_yaml(spy.categories["spy"])) == {
+        "payload": [r"DOMAIN-REGEX,^bad\\.example$"]
+    }
 
 
 def build() -> ResolvedBuild:

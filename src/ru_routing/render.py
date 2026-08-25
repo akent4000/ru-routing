@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 from .models import Category, Dataset, RuleEntry, RuleKind
 from .resolve import ResolvedBuild
 
@@ -23,6 +25,7 @@ class Representation:
     """One target-format decision for a resolved rule."""
 
     target: str
+    dataset: str
     category: str
     kind: RuleKind
     value: str
@@ -61,6 +64,8 @@ _DLC_PREFIXES = {
 _MIHOMO_PREFIXES = {
     RuleKind.DOMAIN: "DOMAIN",
     RuleKind.DOMAIN_SUFFIX: "DOMAIN-SUFFIX",
+    RuleKind.DOMAIN_KEYWORD: "DOMAIN-KEYWORD",
+    RuleKind.DOMAIN_REGEX: "DOMAIN-REGEX",
     RuleKind.CIDR: "IP-CIDR",
 }
 _RULE_ORDER = {
@@ -91,7 +96,7 @@ def render_raw(build: ResolvedBuild, dist: Path) -> RepresentationReport:
 def render_dlc_sources(dataset: Dataset, path: Path) -> RepresentationReport:
     """Atomically render v2fly domain-list-community category source files."""
 
-    report = _report_for_dataset("dlc", dataset, _DOMAIN_KINDS)
+    report = _report_for_dataset("dlc", "standalone", dataset, _DOMAIN_KINDS)
     _raise_for_high_precedence_losses(report)
     destination = Path(path)
     with _staged_directory(destination) as stage:
@@ -107,7 +112,9 @@ def render_dlc_sources(dataset: Dataset, path: Path) -> RepresentationReport:
 def render_geoip_config(dataset: Dataset, path: Path) -> RepresentationReport:
     """Write a v2fly geoip config that embeds all category CIDRs inline."""
 
-    report = _report_for_dataset("geoip", dataset, frozenset({RuleKind.CIDR}))
+    report = _report_for_dataset(
+        "geoip", "standalone", dataset, frozenset({RuleKind.CIDR})
+    )
     _raise_for_high_precedence_losses(report)
     config = {
         "input": [
@@ -133,7 +140,7 @@ def render_geoip_config(dataset: Dataset, path: Path) -> RepresentationReport:
             }
         ],
     }
-    _write_text(Path(path), _json(config))
+    _atomic_write_text(Path(path), _json(config))
     return report
 
 
@@ -158,38 +165,46 @@ def render_singbox_json(category: Category) -> str:
 def render_mihomo_yaml(category: Category) -> str:
     """Return a Mihomo classical-provider YAML source for one category."""
 
-    unsupported = _entries(category.entries, _DOMAIN_KINDS - set(_MIHOMO_PREFIXES))
-    if unsupported and category.name in _HIGH_PRECEDENCE_CATEGORIES:
-        first = unsupported[0]
-        raise RepresentationError(
-            f"mihomo cannot represent {category.name} {first.kind.value}:{first.value}"
-        )
-    lines = ["payload:"]
-    for kind in (RuleKind.DOMAIN, RuleKind.DOMAIN_SUFFIX, RuleKind.CIDR):
+    payload = []
+    for kind in _RULE_ORDER:
         for entry in _entries(category.entries, {kind}):
             suffix = ",no-resolve" if kind == RuleKind.CIDR else ""
-            lines.append(f"  - {_MIHOMO_PREFIXES[kind]},{entry.value}{suffix}")
-    return "\n".join(lines) + "\n"
+            payload.append(f"{_MIHOMO_PREFIXES[kind]},{entry.value}{suffix}")
+    rendered = yaml.safe_dump(
+        {"payload": payload},
+        allow_unicode=False,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    return rendered.replace("\n- ", "\n  - ")
 
 
 def representation_report(build: ResolvedBuild) -> RepresentationReport:
     """Report each format's ability to carry every relevant resolved rule."""
 
     reports = []
-    for dataset in (build.lite, build.server):
+    for dataset_name, dataset in (("lite", build.lite), ("server", build.server)):
         reports.extend(
-            _report_for_dataset("raw", dataset, frozenset(_RULE_ORDER)).entries
-        )
-        reports.extend(_report_for_dataset("dlc", dataset, _DOMAIN_KINDS).entries)
-        reports.extend(
-            _report_for_dataset("geoip", dataset, frozenset({RuleKind.CIDR})).entries
+            _report_for_dataset(
+                "raw", dataset_name, dataset, frozenset(_RULE_ORDER)
+            ).entries
         )
         reports.extend(
-            _report_for_dataset("sing-box", dataset, frozenset(_RULE_ORDER)).entries
+            _report_for_dataset("dlc", dataset_name, dataset, _DOMAIN_KINDS).entries
         )
         reports.extend(
             _report_for_dataset(
-                "mihomo", dataset, frozenset(_MIHOMO_PREFIXES)
+                "geoip", dataset_name, dataset, frozenset({RuleKind.CIDR})
+            ).entries
+        )
+        reports.extend(
+            _report_for_dataset(
+                "sing-box", dataset_name, dataset, frozenset(_RULE_ORDER)
+            ).entries
+        )
+        reports.extend(
+            _report_for_dataset(
+                "mihomo", dataset_name, dataset, frozenset(_MIHOMO_PREFIXES)
             ).entries
         )
     return RepresentationReport(tuple(sorted(reports, key=_representation_key)))
@@ -212,12 +227,16 @@ def _render_raw_dataset(dataset_name: str, dataset: Dataset, root: Path) -> None
 
 
 def _report_for_dataset(
-    target: str, dataset: Dataset, supported: frozenset[RuleKind]
+    target: str,
+    dataset_name: str,
+    dataset: Dataset,
+    supported: frozenset[RuleKind],
 ) -> RepresentationReport:
     relevant = _target_relevant_kinds(target)
     decisions = tuple(
         Representation(
             target=target,
+            dataset=dataset_name,
             category=category_name,
             kind=entry.kind,
             value=entry.value,
@@ -296,9 +315,32 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{path.name}.tmp-",
+            dir=path.parent,
+            delete=False,
+        ) as temporary:
+            temporary_name = temporary.name
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
 def _representation_key(entry: Representation) -> tuple[object, ...]:
     return (
         entry.target,
+        entry.dataset,
         entry.category,
         _RULE_ORDER[entry.kind],
         entry.value,
