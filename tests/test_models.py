@@ -34,14 +34,32 @@ def test_dataset_json_has_stable_category_entry_and_provenance_order():
     assert json.loads(dataset.to_canonical_json()) == {
         "categories": {
             "a": {
-                "entries": [
-                    {"kind": "domain", "sources": ["z"], "value": "a.ru"},
-                    {"kind": "domain", "sources": ["a"], "value": "b.ru"},
+                    "entries": [
+                        {
+                            "attributes": [],
+                            "kind": "domain",
+                            "memberships": [],
+                            "sources": ["z"],
+                            "value": "a.ru",
+                        },
+                        {
+                            "attributes": [],
+                            "kind": "domain",
+                            "memberships": [],
+                            "sources": ["a"],
+                            "value": "b.ru",
+                        },
                 ]
             },
             "z": {
-                "entries": [
-                    {"kind": "domain", "sources": ["second"], "value": "z.ru"}
+                    "entries": [
+                        {
+                            "attributes": [],
+                            "kind": "domain",
+                            "memberships": [],
+                            "sources": ["second"],
+                            "value": "z.ru",
+                        }
                 ]
             },
         }
@@ -56,3 +74,14 @@ def test_canonical_contracts_cannot_be_mutated_after_construction():
         rule.value = "changed.ru"  # type: ignore[misc]
     with pytest.raises(TypeError):
         dataset.categories["other"] = Category("other", frozenset())
+
+
+def test_rule_entry_retains_immutable_source_category_membership():
+    rule = RuleEntry(
+        kind=RuleKind.DOMAIN,
+        value="example.com",
+        sources=frozenset({"fixture/source"}),
+        memberships=frozenset({("fixture/source", "inside")}),
+    )
+
+    assert rule.memberships == frozenset({("fixture/source", "inside")})

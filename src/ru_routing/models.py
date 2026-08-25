@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
@@ -35,9 +35,23 @@ class RuleEntry:
     kind: RuleKind
     value: str
     sources: frozenset[str]
+    attributes: frozenset[str] = field(default_factory=frozenset)
+    memberships: frozenset[tuple[str, str]] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", frozenset(self.sources))
+        object.__setattr__(self, "attributes", frozenset(self.attributes))
+        memberships = frozenset(self.memberships)
+        if any(
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not all(isinstance(part, str) and part for part in item)
+            for item in memberships
+        ):
+            raise ValueError("rule memberships must be non-empty source/category pairs")
+        if any(source not in self.sources for source, _ in memberships):
+            raise ValueError("rule membership source must be present in provenance")
+        object.__setattr__(self, "memberships", memberships)
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,11 @@ class Dataset:
                 "entries": [
                     {
                         "kind": entry.kind.value,
+                        "attributes": sorted(entry.attributes),
+                        "memberships": [
+                            {"category": category, "source": source}
+                            for source, category in sorted(entry.memberships)
+                        ],
                         "sources": sorted(entry.sources),
                         "value": entry.value,
                     }
@@ -76,6 +95,8 @@ class Dataset:
                         key=lambda item: (
                             item.kind.value,
                             item.value,
+                            tuple(sorted(item.attributes)),
+                            tuple(sorted(item.memberships)),
                             tuple(sorted(item.sources)),
                         ),
                     )
