@@ -1,0 +1,101 @@
+"""Immutable normalized routing data shared by every pipeline stage."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from enum import Enum
+from types import MappingProxyType
+from typing import Mapping
+
+
+class RuleKind(str, Enum):
+    """The supported normalized routing rule kinds."""
+
+    DOMAIN = "domain"
+    DOMAIN_SUFFIX = "domain_suffix"
+    DOMAIN_KEYWORD = "domain_keyword"
+    DOMAIN_REGEX = "domain_regex"
+    CIDR = "cidr"
+
+
+class PolicyTier(str, Enum):
+    """Conflict-resolution precedence for a canonical category."""
+
+    DENY = "deny"
+    EXPLICIT_BLOCKED = "explicit_blocked"
+    TRUSTED_DIRECT = "trusted_direct"
+    THEMATIC = "thematic"
+
+
+@dataclass(frozen=True)
+class RuleEntry:
+    """One normalized domain or network rule and its source provenance."""
+
+    kind: RuleKind
+    value: str
+    sources: frozenset[str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sources", frozenset(self.sources))
+
+
+@dataclass(frozen=True)
+class Category:
+    """A named collection of canonical routing entries."""
+
+    name: str
+    entries: frozenset[RuleEntry]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entries", frozenset(self.entries))
+
+
+@dataclass(frozen=True)
+class Dataset:
+    """A fully resolved collection of named routing categories."""
+
+    categories: Mapping[str, Category]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "categories", MappingProxyType(dict(self.categories)))
+
+    def to_canonical_json(self) -> bytes:
+        """Return deterministic UTF-8 JSON suitable for content fingerprints."""
+
+        categories = {
+            name: {
+                "entries": [
+                    {
+                        "kind": entry.kind.value,
+                        "sources": sorted(entry.sources),
+                        "value": entry.value,
+                    }
+                    for entry in sorted(
+                        category.entries,
+                        key=lambda item: (
+                            item.kind.value,
+                            item.value,
+                            tuple(sorted(item.sources)),
+                        ),
+                    )
+                ]
+            }
+            for name, category in sorted(self.categories.items())
+        }
+        return json.dumps(
+            {"categories": categories},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class BuildInputs:
+    """Immutable datasets passed into a build stage."""
+
+    datasets: Mapping[str, Dataset]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "datasets", MappingProxyType(dict(self.datasets)))
