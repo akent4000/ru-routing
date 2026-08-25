@@ -12,7 +12,9 @@ from ru_routing.fetch import FetchedSource
 from ru_routing.models import RuleEntry, RuleKind
 from ru_routing.normalize import (
     TARGET_COMPATIBILITY,
+    GoRegexValidator,
     NormalizationError,
+    RegexValidationError,
     normalize_domain,
     normalize_rule,
     normalize_sources,
@@ -111,7 +113,8 @@ def test_normalize_sources_preserves_target_incompatible_rule_kinds_and_attribut
         [
             raw_rule(RuleKind.DOMAIN_KEYWORD, "Needle", attributes=("ads",)),
             raw_rule(RuleKind.DOMAIN_REGEX, r"^api\.example$", attributes=("ads",)),
-        ]
+        ],
+        regex_validator=AcceptingRegexValidator(),
     )
 
     assert [(entry.kind, entry.value, entry.attributes) for entry in normalized] == [
@@ -122,12 +125,39 @@ def test_normalize_sources_preserves_target_incompatible_rule_kinds_and_attribut
     assert "mihomo" not in TARGET_COMPATIBILITY[RuleKind.DOMAIN_REGEX]
 
 
-@pytest.mark.parametrize("raw", [r"(?=api)", r"(api)\1", r"(?P<api>api)", r"\Aapi"])
-def test_normalize_rule_rejects_regex_outside_conservative_re2_subset(raw):
+@pytest.mark.parametrize("raw", [r"(?=api)", r"(api)\1"])
+def test_normalize_rule_rejects_regex_the_exact_validator_rejects(raw):
     with pytest.raises(
-        NormalizationError, match="fixture/source.*rules.txt:7.*RE2-compatible"
+        NormalizationError, match="fixture/source.*rules.txt:7.*rejected"
     ):
-        normalize_rule(raw_rule(RuleKind.DOMAIN_REGEX, raw))
+        normalize_rule(
+            raw_rule(RuleKind.DOMAIN_REGEX, raw),
+            regex_validator=ContractRegexValidator(),
+        )
+
+
+@pytest.mark.parametrize("raw", [r"(?i)example", r"\p{Greek}+"])
+def test_normalize_rule_accepts_valid_go_re2_syntax_via_exact_validator(raw):
+    validator = ContractRegexValidator()
+
+    assert (
+        normalize_rule(
+            raw_rule(RuleKind.DOMAIN_REGEX, raw), regex_validator=validator
+        ).value
+        == raw
+    )
+    assert validator.patterns == [raw]
+
+
+def test_normalize_rule_fails_explicitly_when_the_go_validator_is_unavailable():
+    validator = GoRegexValidator(command=("missing-go-validator",))
+
+    with pytest.raises(
+        NormalizationError, match="fixture/source.*rules.txt:7.*unavailable"
+    ):
+        normalize_rule(
+            raw_rule(RuleKind.DOMAIN_REGEX, "example"), regex_validator=validator
+        )
 
 
 def test_normalize_sources_resolves_fetched_binary_source_through_the_registry(
@@ -195,3 +225,18 @@ class GeodataReader:
         assert input_type == "geosite_dat"
         assert category == "ru"
         return (GeodataRule(RuleKind.DOMAIN_SUFFIX, "example.com"),)
+
+
+class AcceptingRegexValidator:
+    def validate(self, pattern):
+        return None
+
+
+class ContractRegexValidator:
+    def __init__(self):
+        self.patterns = []
+
+    def validate(self, pattern):
+        self.patterns.append(pattern)
+        if pattern in {r"(?=api)", r"(api)\1"}:
+            raise RegexValidationError("rejected by Go RE2")

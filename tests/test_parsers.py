@@ -157,6 +157,55 @@ def test_parse_source_resolves_dlc_includes_filters_and_affiliations(tmp_path):
     ]
 
 
+def test_parse_source_treats_bang_prefixed_dlc_attributes_as_positive_filters(
+    tmp_path,
+):
+    base = tmp_path / "base"
+    base.write_text(
+        "\n".join(
+            [
+                "full:literal-bang.example @!cn",
+                "full:no-attribute.example",
+                "full:ordinary-cn.example @cn",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rules = tmp_path / "rules"
+    rules.write_text("include:base @!cn\n", encoding="utf-8")
+
+    parsed = tuple(
+        parse_source(
+            source(categories=("base", "rules")),
+            {"base": (base,), "rules": (rules,)},
+        )
+    )
+
+    assert [
+        (rule.value, rule.attributes) for rule in parsed if rule.category == "rules"
+    ] == [("literal-bang.example", frozenset({"!cn"}))]
+
+
+def test_parse_source_resolves_includes_of_affiliated_no_file_targets(tmp_path):
+    base = tmp_path / "base"
+    base.write_text("full:service.example &bundle\n", encoding="utf-8")
+    rules = tmp_path / "rules"
+    rules.write_text("include:bundle\n", encoding="utf-8")
+
+    parsed = tuple(
+        parse_source(
+            source(categories=("base", "rules")),
+            {"base": (base,), "rules": (rules,)},
+        )
+    )
+
+    assert [
+        (rule.category, rule.value)
+        for rule in parsed
+        if rule.category in {"bundle", "rules"}
+    ] == [("rules", "service.example"), ("bundle", "service.example")]
+
+
 @pytest.mark.parametrize(
     ("contents", "match"),
     [

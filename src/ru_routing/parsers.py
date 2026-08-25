@@ -141,9 +141,15 @@ def _parse_plain_text(
         category: _read_list(source.name, category, category_paths)
         for category, category_paths in paths.items()
     }
+    parsed_lists = _materialize_affiliations(parsed_lists)
     lookup = {category.lower(): category for category in parsed_lists}
 
-    for category in source.expected_categories:
+    categories = (*source.expected_categories, *(
+        category
+        for category in parsed_lists
+        if category not in source.expected_categories
+    ))
+    for category in categories:
         for rule in _resolve_list(source.name, category, parsed_lists, lookup, ()):
             yield replace(
                 rule,
@@ -151,15 +157,31 @@ def _parse_plain_text(
                 attributes=_rule_attributes(rule),
                 affiliations=frozenset(),
             )
+
+
+def _materialize_affiliations(
+    parsed_lists: Mapping[str, _ParsedList],
+) -> dict[str, _ParsedList]:
+    """Add affiliation targets before resolving include directives."""
+
+    result = dict(parsed_lists)
+    lookup = {category.lower(): category for category in result}
+    affiliated: dict[str, list[RawRule]] = {}
     for parsed in parsed_lists.values():
         for rule in parsed.entries:
             for affiliation in _affiliations(rule):
-                yield replace(
-                    rule,
-                    category=affiliation,
-                    attributes=_rule_attributes(rule),
-                    affiliations=frozenset(),
-                )
+                affiliated.setdefault(affiliation, []).append(rule)
+    for affiliation, rules in affiliated.items():
+        category = lookup.get(affiliation, affiliation)
+        existing = result.get(category)
+        if existing is None:
+            result[category] = _ParsedList(tuple(rules), ())
+        else:
+            result[category] = _ParsedList(
+                entries=(*existing.entries, *rules),
+                inclusions=existing.inclusions,
+            )
+    return result
 
 
 def _read_list(
@@ -229,7 +251,7 @@ def _parse_inclusion(
         if not field.startswith("@"):
             _raise(source, path, line, f"unexpected inclusion field {field!r}")
         name = field[1:]
-        if name.startswith("-") or name.startswith("!"):
+        if name.startswith("-"):
             forbidden.add(_attribute(source, path, line, name[1:]))
         else:
             required.add(_attribute(source, path, line, name))
