@@ -27,6 +27,16 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="validate policy configuration",
             )
+            command_parser.add_argument(
+                "--config",
+                type=Path,
+                default=Path("config"),
+                metavar="CONFIG_ROOT",
+                help=(
+                    "directory containing sources.yaml, categories.yaml, "
+                    "and thresholds.yaml"
+                ),
+            )
     return parser
 
 
@@ -43,9 +53,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "check" and arguments.config_only:
         try:
-            registry = load_registry(Path("config/sources.yaml"))
-            policy = load_policy(Path("config/categories.yaml"))
-            load_thresholds(Path("config/thresholds.yaml"))
+            registry = load_registry(arguments.config / "sources.yaml")
+            policy = load_policy(arguments.config / "categories.yaml")
+            load_thresholds(arguments.config / "thresholds.yaml")
             if set(policy.source_categories) != registry.declared_category_keys():
                 raise ConfigError(
                     "source registry and category policy do not map the same keys"

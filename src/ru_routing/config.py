@@ -12,6 +12,23 @@ import yaml
 
 from .models import PolicyTier
 
+INITIAL_SOURCE_IDS = frozenset(
+    {
+        "hydraponique/roscomvpn-geoip",
+        "aireps/geosite",
+        "runetfreedom/russia-v2ray-rules-dat",
+        "jutsu-dev/ru-route-lists",
+        "itdoginfo/allow-domains",
+        "Loyalsoldier/v2ray-rules-dat",
+    }
+)
+
+SUPPORTED_SOURCE_LAYOUTS = {
+    "geoip_dat": frozenset({"single_artifact"}),
+    "geosite_dat": frozenset({"single_artifact"}),
+    "plain_text": frozenset({"per_category_urls", "release_assets"}),
+}
+
 
 class ConfigError(ValueError):
     """Raised when a version-controlled policy file is invalid."""
@@ -27,6 +44,8 @@ def _construct_unique_mapping(
     mapping: dict[Any, Any] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
+        if not isinstance(key, str):
+            raise ConfigError("YAML mapping keys must be strings")
         if key in mapping:
             raise ConfigError(f"duplicate YAML key: {key!r}")
         mapping[key] = loader.construct_object(value_node, deep=deep)
@@ -61,14 +80,26 @@ class SourceDefinition:
     name: str
     url: str
     input_type: str
+    layout: str
     required: bool
     expected_categories: tuple[str, ...]
+    category_locations: Mapping[str, tuple[str, ...]]
     attribution: str
     license: LicenseMetadata
     freshness: FreshnessRule
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "expected_categories", tuple(self.expected_categories))
+        object.__setattr__(
+            self,
+            "category_locations",
+            MappingProxyType(
+                {
+                    category: tuple(locations)
+                    for category, locations in self.category_locations.items()
+                }
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -79,6 +110,30 @@ class SourceRegistry:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
+
+    def resolve(self, source_id: str) -> SourceDefinition:
+        """Resolve an entry provenance source ID to its registered source."""
+
+        for source in self.sources:
+            if source.name == source_id:
+                return source
+        raise ConfigError(f"unknown source ID: {source_id}")
+
+    def attribution_for(self, source_id: str) -> str:
+        """Return immutable attribution for a registered provenance source ID."""
+
+        return self.resolve(source_id).attribution
+
+    def fixture_overrides(self, overrides: Mapping[str, Path]) -> Mapping[str, Path]:
+        """Validate fixture-only inputs without weakening the live registry."""
+
+        resolved: dict[str, Path] = {}
+        for source_id, path in overrides.items():
+            self.resolve(source_id)
+            if not isinstance(path, Path):
+                raise ConfigError(f"fixture override for {source_id} must be a Path")
+            resolved[source_id] = path
+        return MappingProxyType(resolved)
 
     def declared_category_keys(self) -> frozenset[str]:
         """Return the complete explicit set of ``source:category`` keys."""
@@ -105,15 +160,41 @@ class CategoryMapping:
 
 
 @dataclass(frozen=True)
+class CanonicalCategoryPolicy:
+    """Dataset scope and conflict tier resolved by canonical category name."""
+
+    name: str
+    datasets: frozenset[str]
+    tier: PolicyTier
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "datasets", frozenset(self.datasets))
+
+
+@dataclass(frozen=True)
 class CategoryPolicy:
     """Explicit source-category mapping and conflict policy."""
 
     source_categories: Mapping[str, CategoryMapping]
+    canonical_categories: Mapping[str, CanonicalCategoryPolicy]
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "source_categories", MappingProxyType(dict(self.source_categories))
         )
+        object.__setattr__(
+            self,
+            "canonical_categories",
+            MappingProxyType(dict(self.canonical_categories)),
+        )
+
+    def canonical_category(self, name: str) -> CanonicalCategoryPolicy:
+        """Resolve the dataset scope and conflict tier for a canonical category."""
+
+        try:
+            return self.canonical_categories[name]
+        except KeyError as error:
+            raise ConfigError(f"unknown canonical category: {name}") from error
 
 
 @dataclass(frozen=True)
@@ -131,7 +212,7 @@ def _load_yaml(path: Path) -> Mapping[str, Any]:
         raise ConfigError(f"cannot read {path}: {error}") from error
     try:
         loaded = yaml.load(contents, Loader=_UniqueKeyLoader)
-    except yaml.YAMLError as error:
+    except (TypeError, yaml.YAMLError) as error:
         raise ConfigError(f"invalid YAML in {path}: {error}") from error
     if not isinstance(loaded, dict):
         raise ConfigError(f"{path} must contain a mapping")
@@ -173,6 +254,36 @@ def _source_category_key(source: str, source_category: str) -> str:
     return f"{source}:{source_category}"
 
 
+def _https_url(value: Any, context: str) -> str:
+    url = _string(value, context)
+    parsed_url = urlparse(url)
+    if parsed_url.scheme != "https" or not parsed_url.netloc:
+        raise ConfigError(f"{context} must be an HTTPS URL")
+    return url
+
+
+def _category_locations(
+    value: Any, categories: tuple[str, ...], context: str
+) -> Mapping[str, tuple[str, ...]]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{context} must be a mapping")
+    if set(value) != set(categories):
+        raise ConfigError(f"{context} must define every expected category exactly once")
+    locations: dict[str, tuple[str, ...]] = {}
+    for category, raw_locations in value.items():
+        if isinstance(raw_locations, str):
+            raw_locations = [raw_locations]
+        if not isinstance(raw_locations, list) or not raw_locations:
+            raise ConfigError(f"{context}.{category} must be a non-empty URL list")
+        category_locations = tuple(
+            _https_url(location, f"{context}.{category}") for location in raw_locations
+        )
+        if len(set(category_locations)) != len(category_locations):
+            raise ConfigError(f"{context}.{category} contains duplicate URLs")
+        locations[category] = category_locations
+    return locations
+
+
 def load_registry(path: Path) -> SourceRegistry:
     """Load every initial required upstream from a strict source registry."""
 
@@ -194,8 +305,10 @@ def load_registry(path: Path) -> SourceRegistry:
                 "name",
                 "url",
                 "input_type",
+                "layout",
                 "required",
                 "expected_categories",
+                "category_locations",
                 "attribution",
                 "license",
                 "freshness",
@@ -206,10 +319,7 @@ def load_registry(path: Path) -> SourceRegistry:
         if name in names:
             raise ConfigError(f"duplicate source name: {name}")
         names.add(name)
-        url = _string(raw_source["url"], f"{context}.url")
-        parsed_url = urlparse(url)
-        if parsed_url.scheme != "https" or not parsed_url.netloc:
-            raise ConfigError(f"{context}.url must be an HTTPS URL")
+        url = _https_url(raw_source["url"], f"{context}.url")
         if raw_source["required"] is not True:
             raise ConfigError(
                 f"{context}.required must be true for the initial registry"
@@ -223,6 +333,21 @@ def load_registry(path: Path) -> SourceRegistry:
         )
         if len(set(categories)) != len(categories):
             raise ConfigError(f"{context}.expected_categories contains duplicates")
+        input_type = _string(raw_source["input_type"], f"{context}.input_type")
+        layout = _string(raw_source["layout"], f"{context}.layout")
+        if input_type not in SUPPORTED_SOURCE_LAYOUTS:
+            raise ConfigError(f"{context}.input_type is not supported")
+        if layout not in SUPPORTED_SOURCE_LAYOUTS[input_type]:
+            raise ConfigError(f"{context}.layout is not valid for {input_type}")
+        category_locations = _category_locations(
+            raw_source["category_locations"],
+            categories,
+            f"{context}.category_locations",
+        )
+        if layout == "single_artifact" and any(
+            locations != (url,) for locations in category_locations.values()
+        ):
+            raise ConfigError(f"{context}.single_artifact locations must equal its URL")
         raw_license = raw_source["license"]
         if not isinstance(raw_license, dict):
             raise ConfigError(f"{context}.license must be a mapping")
@@ -249,9 +374,11 @@ def load_registry(path: Path) -> SourceRegistry:
             SourceDefinition(
                 name=name,
                 url=url,
-                input_type=_string(raw_source["input_type"], f"{context}.input_type"),
+                input_type=input_type,
+                layout=layout,
                 required=True,
                 expected_categories=categories,
+                category_locations=category_locations,
                 attribution=_string(
                     raw_source["attribution"], f"{context}.attribution"
                 ),
@@ -271,6 +398,17 @@ def load_registry(path: Path) -> SourceRegistry:
                 ),
             )
         )
+    if names != INITIAL_SOURCE_IDS:
+        missing = INITIAL_SOURCE_IDS - names
+        unexpected = names - INITIAL_SOURCE_IDS
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(sorted(missing))}")
+        if unexpected:
+            details.append(f"unexpected: {', '.join(sorted(unexpected))}")
+        raise ConfigError(
+            f"initial source IDs must match exactly ({'; '.join(details)})"
+        )
     return SourceRegistry(tuple(sources))
 
 
@@ -283,6 +421,7 @@ def load_policy(path: Path) -> CategoryPolicy:
     if not isinstance(raw_mappings, list) or not raw_mappings:
         raise ConfigError("category policy mappings must be a non-empty list")
     mappings: dict[str, CategoryMapping] = {}
+    canonical_categories: dict[str, CanonicalCategoryPolicy] = {}
     for index, raw_mapping in enumerate(raw_mappings):
         context = f"mappings[{index}]"
         if not isinstance(raw_mapping, dict):
@@ -313,16 +452,28 @@ def load_policy(path: Path) -> CategoryPolicy:
             tier = PolicyTier(_string(raw_mapping["tier"], f"{context}.tier"))
         except ValueError as error:
             raise ConfigError(f"{context}.tier is not a known policy tier") from error
-        mappings[key] = CategoryMapping(
-            source=source,
-            source_category=source_category,
-            canonical_category=_string(
-                raw_mapping["canonical_category"], f"{context}.canonical_category"
-            ),
+        canonical_category = _string(
+            raw_mapping["canonical_category"], f"{context}.canonical_category"
+        )
+        canonical_policy = CanonicalCategoryPolicy(
+            name=canonical_category,
             datasets=datasets,
             tier=tier,
         )
-    return CategoryPolicy(mappings)
+        existing_policy = canonical_categories.get(canonical_category)
+        if existing_policy and existing_policy != canonical_policy:
+            raise ConfigError(
+                f"{context} conflicts with canonical category {canonical_category}"
+            )
+        canonical_categories[canonical_category] = canonical_policy
+        mappings[key] = CategoryMapping(
+            source=source,
+            source_category=source_category,
+            canonical_category=canonical_category,
+            datasets=datasets,
+            tier=tier,
+        )
+    return CategoryPolicy(mappings, canonical_categories)
 
 
 def load_thresholds(path: Path) -> ThresholdPolicy:

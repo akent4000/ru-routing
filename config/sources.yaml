@@ -2,8 +2,11 @@ sources:
   - name: hydraponique/roscomvpn-geoip
     url: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
     input_type: geoip_dat
+    layout: single_artifact
     required: true
     expected_categories: [ru]
+    category_locations:
+      ru: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
     attribution: hydraponique/roscomvpn-geoip contributors
     license:
       spdx: GPL-3.0-only
@@ -13,8 +16,24 @@ sources:
   - name: aireps/geosite
     url: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
     input_type: geosite_dat
+    layout: single_artifact
     required: true
     expected_categories: [category-ru, category-ads-all, category-tracker, category-malware, category-phishing, category-cryptominers, category-google, category-youtube, category-telegram, category-discord, category-meta, category-github, category-streaming, category-ai]
+    category_locations:
+      category-ru: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-ads-all: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-tracker: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-malware: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-phishing: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-cryptominers: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-google: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-youtube: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-telegram: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-discord: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-meta: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-github: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-streaming: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      category-ai: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
     attribution: aireps/geosite, synchronized from v2fly/domain-list-community
     license:
       spdx: MIT
@@ -25,8 +44,14 @@ sources:
   - name: runetfreedom/russia-v2ray-rules-dat
     url: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
     input_type: geosite_dat
+    layout: single_artifact
     required: true
     expected_categories: [ru-blocked, ru-inside, ru-outside, ru]
+    category_locations:
+      ru-blocked: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      ru-inside: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      ru-outside: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      ru: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
     attribution: runetfreedom/russia-v2ray-rules-dat contributors
     license:
       spdx: GPL-3.0-only
@@ -34,10 +59,14 @@ sources:
     freshness:
       max_age_hours: 48
   - name: jutsu-dev/ru-route-lists
-    url: https://github.com/jutsu-dev/ru-route-lists
+    url: https://api.github.com/repos/jutsu-dev/ru-route-lists/releases/latest
     input_type: plain_text
+    layout: release_assets
     required: true
     expected_categories: [blocked-domains, blocked-cidrs]
+    category_locations:
+      blocked-domains: https://github.com/jutsu-dev/ru-route-lists/releases/download/latest/rkn-domains.lst
+      blocked-cidrs: https://github.com/jutsu-dev/ru-route-lists/releases/download/latest/rkn-ipsets.lst
     attribution: jutsu-dev/ru-route-lists contributors
     license:
       spdx: MIT
@@ -45,10 +74,24 @@ sources:
     freshness:
       max_age_hours: 48
   - name: itdoginfo/allow-domains
-    url: https://github.com/itdoginfo/allow-domains
+    url: https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/README.md
     input_type: plain_text
+    layout: per_category_urls
     required: true
     expected_categories: [inside, outside, services]
+    category_locations:
+      inside: https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Russia/inside-raw.lst
+      outside: https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Russia/outside-raw.lst
+      services:
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/cloudflare.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/cloudfront.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/discord.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/google_ai.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/meta.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/telegram.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/tiktok.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/twitter.lst
+        - https://raw.githubusercontent.com/itdoginfo/allow-domains/c0376e54d78a606c09d6eafad6dd792964edaead/Services/youtube.lst
     attribution: itdoginfo/allow-domains contributors
     license:
       spdx: MIT
@@ -58,8 +101,12 @@ sources:
   - name: Loyalsoldier/v2ray-rules-dat
     url: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
     input_type: geoip_dat
+    layout: single_artifact
     required: true
     expected_categories: [geoip-ru, geoip-global]
+    category_locations:
+      geoip-ru: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+      geoip-global: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
     attribution: Loyalsoldier/v2ray-rules-dat contributors
     license:
       spdx: GPL-3.0-only
