@@ -89,6 +89,90 @@ def test_server_keeps_thematic_membership_when_it_overlaps_trusted_direct():
     assert entries(build.server, "video") == {("domain", "video.example")}
 
 
+def test_lite_removes_thematic_entry_that_overlaps_trusted_direct():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "video.example", "ru"),
+            rule(RuleKind.DOMAIN, "video.example", "video"),
+        ),
+        policy_for("ru", "video"),
+    )
+
+    assert entries(build.lite, "video") == set()
+    assert entries(build.server, "video") == {("domain", "video.example")}
+    assert {
+        (record.higher_category, record.lower_category, record.dataset)
+        for record in build.conflicts.resolved
+    } == {("ru", "video", "lite")}
+
+
+def test_blocked_regex_removes_potentially_matching_direct_exact_and_is_reported():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "api.example.ru", "ru"),
+            rule(RuleKind.DOMAIN_REGEX, r"^api\.example\.ru$", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+    assert {
+        (record.higher_entry.kind, record.lower_entry.kind)
+        for record in build.conflicts.resolved
+    } == {(RuleKind.DOMAIN_REGEX, RuleKind.DOMAIN)}
+
+
+def test_exact_blocker_removes_potentially_matching_direct_regex():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN_REGEX, r"^api\.example\.ru$", "ru"),
+            rule(RuleKind.DOMAIN, "api.example.ru", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+    assert build.conflicts.unresolved == ()
+
+
+def test_blocked_regex_removes_broader_direct_suffix_when_holes_are_unrepresentable():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN_SUFFIX, "example.ru", "ru"),
+            rule(RuleKind.DOMAIN_REGEX, r"^blocked\.example\.ru$", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+    assert build.conflicts.unresolved == ()
+
+
+def test_blocked_suffix_removes_broader_direct_suffix_when_holes_are_unrepresentable():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN_SUFFIX, "example.ru", "ru"),
+            rule(RuleKind.DOMAIN_SUFFIX, "blocked.example.ru", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+    assert build.conflicts.unresolved == ()
+
+
+def test_broader_blocked_suffix_removes_contained_direct_exact():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "api.example.ru", "ru"),
+            rule(RuleKind.DOMAIN_SUFFIX, "example.ru", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+
+
 def test_server_is_a_per_shared_category_superset_of_lite():
     build = resolve_datasets(
         (
@@ -101,6 +185,92 @@ def test_server_is_a_per_shared_category_superset_of_lite():
     assert_server_superset(build.lite, build.server)
     assert entries(build.server, "ru") == entries(build.lite, "ru")
     assert entries(build.server, "blocked") == entries(build.lite, "blocked")
+
+
+def test_resolver_produces_a_strict_server_superset_for_shared_thematic_category():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "video.example", "ru"),
+            rule(RuleKind.DOMAIN, "video.example", "video"),
+        ),
+        policy_for("ru", "video"),
+    )
+
+    assert_server_superset(build.lite, build.server)
+    assert (
+        build.lite.categories["video"].entries
+        < build.server.categories["video"].entries
+    )
+
+
+def test_mapping_membership_datasets_control_lite_and_server_category_entries():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "video.example", "ru", source="direct"),
+            rule(RuleKind.DOMAIN, "video.example", "video", source="service"),
+        ),
+        policy_with_membership_datasets(
+            {
+                ("direct", "ru"): ("ru", PolicyTier.TRUSTED_DIRECT, {"lite", "server"}),
+                ("service", "video"): ("video", PolicyTier.THEMATIC, {"server"}),
+            }
+        ),
+    )
+
+    assert "video" not in build.lite.categories
+    assert entries(build.server, "video") == {("domain", "video.example")}
+
+
+def test_resolver_rejects_shared_category_missing_a_lite_entry_on_server():
+    policy = policy_with_membership_datasets(
+        {
+            ("lite-source", "ru-lite"): (
+                "ru",
+                PolicyTier.TRUSTED_DIRECT,
+                {"lite"},
+            ),
+            ("server-source", "ru-server"): (
+                "ru",
+                PolicyTier.TRUSTED_DIRECT,
+                {"server"},
+            ),
+        }
+    )
+
+    with pytest.raises(ResolutionError, match="server category ru"):
+        resolve_datasets(
+            (
+                rule(RuleKind.DOMAIN, "lite.example", "ru-lite", source="lite-source"),
+                rule(
+                    RuleKind.DOMAIN,
+                    "server.example",
+                    "ru-server",
+                    source="server-source",
+                ),
+            ),
+            policy,
+        )
+
+
+@pytest.mark.parametrize(
+    ("direct", "blocker", "expected"),
+    [
+        ("203.0.113.0/25", "203.0.113.0/24", set()),
+        ("2001:db8:1::/48", "2001:db8::/32", set()),
+    ],
+)
+def test_containing_blocker_removes_entire_ipv4_or_ipv6_direct_network(
+    direct, blocker, expected
+):
+    build = resolve_datasets(
+        (
+            rule(RuleKind.CIDR, direct, "ru"),
+            rule(RuleKind.CIDR, blocker, "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == expected
 
 
 def test_server_superset_check_rejects_a_missing_shared_entry():
@@ -217,6 +387,34 @@ def policy_for(*categories: str) -> CategoryPolicy:
             tier=tiers.get(category, PolicyTier.THEMATIC),
         )
         for category in categories
+    }
+    return CategoryPolicy(source_categories, canonical_categories)
+
+
+def policy_with_membership_datasets(
+    definitions: dict[tuple[str, str], tuple[str, PolicyTier, set[str]]],
+) -> CategoryPolicy:
+    source_categories = {
+        f"{source}:{source_category}": CategoryMapping(
+            source,
+            source_category,
+            canonical_category,
+            frozenset(datasets),
+            tier,
+        )
+        for (source, source_category), (
+            canonical_category,
+            tier,
+            datasets,
+        ) in definitions.items()
+    }
+    canonical_categories = {
+        canonical_category: CanonicalCategoryPolicy(
+            canonical_category,
+            frozenset({"lite", "server"}),
+            tier,
+        )
+        for canonical_category, tier, _ in definitions.values()
     }
     return CategoryPolicy(source_categories, canonical_categories)
 

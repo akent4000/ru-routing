@@ -18,6 +18,7 @@ class ResolutionError(ValueError):
 class Conflict:
     """One overlap between categories with a policy-precedence relationship."""
 
+    dataset: str
     higher_category: str
     lower_category: str
     higher_entry: RuleEntry
@@ -75,20 +76,31 @@ def resolve_datasets(
     """
 
     categorized = _categorize(rules, policy)
-    tiers = {name: policy.canonical_category(name).tier for name in categorized}
-    conflicts_before = _conflicts(categorized, tiers)
-    resolved_entries = _resolve_categories(categorized, tiers)
-    conflicts_after = _conflicts(resolved_entries, tiers)
+    resolved_datasets: dict[str, dict[str, tuple[RuleEntry, ...]]] = {}
+    conflicts_before: list[Conflict] = []
+    conflicts_after: list[Conflict] = []
+    for dataset in ("lite", "server"):
+        entries = categorized[dataset]
+        tiers = {name: policy.canonical_category(name).tier for name in entries}
+        before = _conflicts(dataset, entries, tiers)
+        resolved = _resolve_categories(dataset, entries, tiers)
+        after = _conflicts(dataset, resolved, tiers)
+        resolved_datasets[dataset] = resolved
+        conflicts_before.extend(before)
+        conflicts_after.extend(after)
+
+    sorted_before = tuple(sorted(conflicts_before, key=_conflict_key))
+    sorted_after = tuple(sorted(conflicts_after, key=_conflict_key))
     report = ConflictReport(
-        overlaps_before=conflicts_before,
-        overlaps_after=conflicts_after,
+        overlaps_before=sorted_before,
+        overlaps_after=sorted_after,
         resolved=tuple(
-            conflict for conflict in conflicts_before if conflict not in conflicts_after
+            conflict for conflict in sorted_before if conflict not in sorted_after
         ),
     )
 
-    lite = _dataset_for("lite", resolved_entries, policy)
-    server = _dataset_for("server", resolved_entries, policy)
+    lite = _dataset_for(resolved_datasets["lite"])
+    server = _dataset_for(resolved_datasets["server"])
     assert_server_superset(lite, server)
     return ResolvedBuild(lite=lite, server=server, conflicts=report)
 
@@ -113,8 +125,10 @@ def assert_server_superset(lite: Dataset, server: Dataset) -> None:
 
 def _categorize(
     rules: Iterable[RuleEntry], policy: CategoryPolicy
-) -> dict[str, tuple[RuleEntry, ...]]:
-    grouped: dict[str, dict[tuple[RuleKind, str, frozenset[str]], _Provenance]] = {}
+) -> dict[str, dict[str, tuple[RuleEntry, ...]]]:
+    grouped: dict[
+        str, dict[str, dict[tuple[RuleKind, str, frozenset[str]], _Provenance]]
+    ] = {"lite": {}, "server": {}}
     for rule in rules:
         for source, source_category in sorted(rule.memberships):
             try:
@@ -124,26 +138,30 @@ def _categorize(
                     f"no category policy mapping for {source}:{source_category}"
                 ) from error
             canonical = policy.canonical_category(mapping.canonical_category)
-            category = grouped.setdefault(canonical.name, {})
-            key = (rule.kind, rule.value, rule.attributes)
-            provenance = category.setdefault(key, _Provenance())
-            provenance.sources.add(source)
-            provenance.memberships.add((source, source_category))
+            for dataset in mapping.datasets:
+                category = grouped[dataset].setdefault(canonical.name, {})
+                key = (rule.kind, rule.value, rule.attributes)
+                provenance = category.setdefault(key, _Provenance())
+                provenance.sources.add(source)
+                provenance.memberships.add((source, source_category))
 
     return {
-        name: tuple(
-            RuleEntry(
-                kind=kind,
-                value=value,
-                sources=frozenset(provenance.sources),
-                attributes=attributes,
-                memberships=frozenset(provenance.memberships),
+        dataset: {
+            name: tuple(
+                RuleEntry(
+                    kind=kind,
+                    value=value,
+                    sources=frozenset(provenance.sources),
+                    attributes=attributes,
+                    memberships=frozenset(provenance.memberships),
+                )
+                for (kind, value, attributes), provenance in sorted(
+                    entries.items(), key=lambda item: _entry_key_from_parts(*item[0])
+                )
             )
-            for (kind, value, attributes), provenance in sorted(
-                entries.items(), key=lambda item: _entry_key_from_parts(*item[0])
-            )
-        )
-        for name, entries in sorted(grouped.items())
+            for name, entries in sorted(categories.items())
+        }
+        for dataset, categories in grouped.items()
     }
 
 
@@ -158,7 +176,9 @@ class _Provenance:
 
 
 def _resolve_categories(
-    categorized: dict[str, tuple[RuleEntry, ...]], tiers: dict[str, PolicyTier]
+    dataset: str,
+    categorized: dict[str, tuple[RuleEntry, ...]],
+    tiers: dict[str, PolicyTier],
 ) -> dict[str, tuple[RuleEntry, ...]]:
     resolved: dict[str, tuple[RuleEntry, ...]] = {}
     for category, entries in categorized.items():
@@ -166,7 +186,7 @@ def _resolve_categories(
         blockers = tuple(
             blocker
             for blocker_category, blocker_entries in categorized.items()
-            if _takes_ownership(tiers[blocker_category], tier)
+            if _takes_ownership(dataset, tiers[blocker_category], tier)
             for blocker in blocker_entries
         )
         resolved[category] = tuple(
@@ -177,14 +197,14 @@ def _resolve_categories(
     return resolved
 
 
-def _takes_ownership(higher: PolicyTier, lower: PolicyTier) -> bool:
+def _takes_ownership(dataset: str, higher: PolicyTier, lower: PolicyTier) -> bool:
     """Whether a higher tier must remove matching entries from a lower tier."""
 
     if _TIER_PRIORITY[higher] <= _TIER_PRIORITY[lower]:
         return False
-    if lower == PolicyTier.THEMATIC:
+    if dataset == "server" and lower == PolicyTier.THEMATIC:
         return False
-    return lower in {PolicyTier.EXPLICIT_BLOCKED, PolicyTier.TRUSTED_DIRECT}
+    return True
 
 
 def _subtract_entry(
@@ -192,10 +212,7 @@ def _subtract_entry(
 ) -> tuple[RuleEntry, ...]:
     if entry.kind == RuleKind.CIDR:
         return _subtract_cidr(entry, blockers)
-    if entry.kind in {RuleKind.DOMAIN, RuleKind.DOMAIN_SUFFIX}:
-        if any(_domains_overlap(entry, blocker) for blocker in blockers):
-            return ()
-    elif any(_same_rule(entry, blocker) for blocker in blockers):
+    if any(_entries_overlap(entry, blocker) for blocker in blockers):
         return ()
     return (entry,)
 
@@ -234,10 +251,13 @@ def _subtract_cidr(
 
 
 def _conflicts(
-    categorized: dict[str, tuple[RuleEntry, ...]], tiers: dict[str, PolicyTier]
+    dataset: str,
+    categorized: dict[str, tuple[RuleEntry, ...]],
+    tiers: dict[str, PolicyTier],
 ) -> tuple[Conflict, ...]:
     conflicts = [
         Conflict(
+            dataset=dataset,
             higher_category=higher_category,
             lower_category=lower_category,
             higher_entry=higher_entry,
@@ -245,7 +265,7 @@ def _conflicts(
         )
         for higher_category, higher_entries in categorized.items()
         for lower_category, lower_entries in categorized.items()
-        if _takes_ownership(tiers[higher_category], tiers[lower_category])
+        if _takes_ownership(dataset, tiers[higher_category], tiers[lower_category])
         for higher_entry in higher_entries
         for lower_entry in lower_entries
         if _entries_overlap(higher_entry, lower_entry)
@@ -261,6 +281,18 @@ def _entries_overlap(first: RuleEntry, second: RuleEntry) -> bool:
             first_network.version == second_network.version
             and first_network.overlaps(second_network)
         )
+    if first.kind == RuleKind.CIDR or second.kind == RuleKind.CIDR:
+        return False
+    if RuleKind.DOMAIN_REGEX in {first.kind, second.kind}:
+        return {
+            first.kind,
+            second.kind,
+        } <= {
+            RuleKind.DOMAIN,
+            RuleKind.DOMAIN_SUFFIX,
+            RuleKind.DOMAIN_KEYWORD,
+            RuleKind.DOMAIN_REGEX,
+        }
     return _domains_overlap(first, second)
 
 
@@ -291,16 +323,11 @@ def _same_rule(first: RuleEntry, second: RuleEntry) -> bool:
     return first.kind == second.kind and first.value == second.value
 
 
-def _dataset_for(
-    name: str,
-    categorized: dict[str, tuple[RuleEntry, ...]],
-    policy: CategoryPolicy,
-) -> Dataset:
+def _dataset_for(categorized: dict[str, tuple[RuleEntry, ...]]) -> Dataset:
     return Dataset(
         {
             category_name: Category(category_name, frozenset(entries))
             for category_name, entries in sorted(categorized.items())
-            if name in policy.canonical_category(category_name).datasets
         }
     )
 
@@ -334,6 +361,7 @@ def _network_key(
 
 def _conflict_key(conflict: Conflict) -> tuple[object, ...]:
     return (
+        conflict.dataset,
         conflict.higher_category,
         conflict.lower_category,
         _entry_key(conflict.higher_entry),
