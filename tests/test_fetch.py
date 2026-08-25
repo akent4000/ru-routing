@@ -152,7 +152,11 @@ def test_rejects_a_release_asset_whose_declared_checksum_does_not_match(tmp_path
     def handler(request):
         if request.url.path == "/repos/example/source/releases/latest":
             return httpx.Response(200, json=metadata)
-        if request.url.path.endswith("/commits/main"):
+        if request.url.path == "/repos/example/source/git/ref/tags/v1.2.3":
+            return httpx.Response(
+                200, json={"object": {"type": "commit", "sha": "tagged-commit"}}
+            )
+        if request.url.path.endswith("/commits/tagged-commit"):
             return httpx.Response(
                 200,
                 json={
@@ -192,7 +196,11 @@ def test_follows_a_resolved_release_asset_redirect_before_hashing_it(tmp_path):
     def handler(request):
         if request.url.path == "/repos/example/source/releases/latest":
             return httpx.Response(200, json=metadata)
-        if request.url.path.endswith("/commits/main"):
+        if request.url.path == "/repos/example/source/git/ref/tags/v1.2.3":
+            return httpx.Response(
+                200, json={"object": {"type": "commit", "sha": "tagged-commit"}}
+            )
+        if request.url.path.endswith("/commits/tagged-commit"):
             return httpx.Response(
                 200,
                 json={
@@ -220,6 +228,73 @@ def test_follows_a_resolved_release_asset_redirect_before_hashing_it(tmp_path):
     assert fetched[0].object_paths["rules"][0].read_bytes() == body
 
 
+@pytest.mark.parametrize(
+    ("reference_type", "reference_sha"),
+    [("commit", "lightweight-commit"), ("tag", "annotated-tag-object")],
+)
+def test_resolves_release_tag_refs_to_the_tagged_commit(
+    tmp_path, reference_type, reference_sha
+):
+    body = b"rules.example\n"
+    metadata = {
+        "tag_name": "v1.2.3",
+        "target_commitish": "main",
+        "published_at": "2999-01-01T00:00:00Z",
+        "assets": [
+            {
+                "name": "rules.txt",
+                "browser_download_url": "https://downloads.example.test/rules.txt",
+                "digest": f"sha256:{hashlib.sha256(body).hexdigest()}",
+            }
+        ],
+    }
+
+    def handler(request):
+        if request.url.path == "/repos/example/source/releases/latest":
+            return httpx.Response(200, json=metadata)
+        if request.url.path == "/repos/example/source/git/ref/tags/v1.2.3":
+            return httpx.Response(
+                200, json={"object": {"type": reference_type, "sha": reference_sha}}
+            )
+        if request.url.path == "/repos/example/source/git/tags/annotated-tag-object":
+            return httpx.Response(
+                200,
+                json={"object": {"type": "commit", "sha": "tagged-commit"}},
+            )
+        if request.url.path.endswith("/commits/lightweight-commit"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "lightweight-commit",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        if request.url.path.endswith("/commits/tagged-commit"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "tagged-commit",
+                    "commit": {"author": {"date": "2999-01-01T00:00:00Z"}},
+                },
+            )
+        if request.url.path.endswith("/commits/main"):
+            pytest.fail("release provenance must not resolve target_commitish")
+        return httpx.Response(200, content=body)
+
+    release_source = source(
+        url="https://api.github.com/repos/example/source/releases/latest",
+        layout="release_assets",
+        location="https://github.com/example/source/releases/download/latest/rules.txt",
+    )
+
+    fetched = fetch_all(
+        SourceRegistry((release_source,)), tmp_path / "inputs", client(handler)
+    )
+
+    expected = "lightweight-commit" if reference_type == "commit" else "tagged-commit"
+    assert fetched[0].resolved_revision == expected
+
+
 def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path):
     now = datetime.now(timezone.utc)
     source_commit = now - timedelta(hours=72)
@@ -232,12 +307,25 @@ def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path)
     def handler(request):
         if request.url.path == "/repos/aireps/geosite/releases/latest":
             return httpx.Response(200, json=metadata)
-        if request.url.path.endswith("/commits/main"):
+        if request.url.path == "/repos/aireps/geosite/git/ref/tags/v2026.08.25":
+            return httpx.Response(
+                200,
+                json={"object": {"type": "commit", "sha": "tagged-aireps-commit"}},
+            )
+        if request.url.path.endswith("/commits/tagged-aireps-commit"):
             return httpx.Response(
                 200,
                 json={
                     "sha": "aireps-commit",
                     "commit": {"author": {"date": source_commit.isoformat()}},
+                },
+            )
+        if request.url.path.endswith("/commits/main"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "moving-main-commit",
+                    "commit": {"author": {"date": now.isoformat()}},
                 },
             )
         if request.url.path == "/repos/v2fly/domain-list-community/commits":

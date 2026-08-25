@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -167,16 +167,11 @@ def _resolve_release(source: SourceDefinition, client: httpx.Client) -> _Release
         return None
     document = _json_response(source.name, endpoint, client)
     tag_name = _required_string(document, "tag_name")
-    target = _required_string(document, "target_commitish")
     published_at = _required_datetime(document, "published_at")
     owner, repository = _github_repository(endpoint)
-    commit = _json_response(
-        source.name,
-        f"https://api.github.com/repos/{owner}/{repository}/commits/{target}",
-        client,
+    revision, commit_at = _resolve_release_tag(
+        source.name, owner, repository, tag_name, client
     )
-    revision = _required_string(commit, "sha")
-    commit_at = _commit_datetime(commit)
     raw_assets = document.get("assets")
     if not isinstance(raw_assets, list):
         raise FetchError("release metadata has no assets")
@@ -192,11 +187,44 @@ def _resolve_release(source: SourceDefinition, client: httpx.Client) -> _Release
         assets[name] = (url, _parse_digest(digest) if digest else None)
     if not assets:
         raise FetchError("release metadata has no assets")
-    # The release tag is recorded in metadata by the caller's resolved commit;
-    # validating it here ensures an incomplete release response is never accepted.
-    if not tag_name:
-        raise FetchError("release metadata has no tag")
     return _Release(revision, published_at, commit_at, MappingProxyType(assets))
+
+
+def _resolve_release_tag(
+    source_name: str,
+    owner: str,
+    repository: str,
+    tag_name: str,
+    client: httpx.Client,
+) -> tuple[str, datetime]:
+    """Resolve a release tag through Git objects to its immutable commit."""
+
+    reference = _json_response(
+        source_name,
+        f"https://api.github.com/repos/{owner}/{repository}/git/ref/tags/"
+        f"{quote(tag_name, safe='')}",
+        client,
+    )
+    object_type, object_sha = _git_object(reference)
+    seen_tags: set[str] = set()
+    while object_type == "tag":
+        if object_sha in seen_tags:
+            raise FetchError("release tag metadata contains a cycle")
+        seen_tags.add(object_sha)
+        annotated_tag = _json_response(
+            source_name,
+            f"https://api.github.com/repos/{owner}/{repository}/git/tags/{object_sha}",
+            client,
+        )
+        object_type, object_sha = _git_object(annotated_tag)
+    if object_type != "commit":
+        raise FetchError("release tag does not resolve to a commit")
+    commit = _json_response(
+        source_name,
+        f"https://api.github.com/repos/{owner}/{repository}/commits/{object_sha}",
+        client,
+    )
+    return _required_string(commit, "sha"), _commit_datetime(commit)
 
 
 def _resolve_raw_commit(
@@ -461,6 +489,15 @@ def _commit_datetime(document: Mapping[str, Any]) -> datetime:
     if not isinstance(author, dict):
         raise FetchError("upstream commit metadata is incomplete")
     return _required_datetime(author, "date")
+
+
+def _git_object(document: Mapping[str, Any]) -> tuple[str, str]:
+    object_value = document.get("object")
+    if not isinstance(object_value, dict):
+        raise FetchError("release tag metadata is incomplete")
+    object_type = _required_string(object_value, "type")
+    object_sha = _required_string(object_value, "sha")
+    return object_type, object_sha
 
 
 def _parse_digest(value: str) -> str:
