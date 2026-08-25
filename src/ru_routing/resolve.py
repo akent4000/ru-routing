@@ -62,6 +62,15 @@ _TIER_PRIORITY = {
     PolicyTier.THEMATIC: 1,
 }
 
+_DOMAIN_RULE_KINDS = frozenset(
+    {
+        RuleKind.DOMAIN,
+        RuleKind.DOMAIN_SUFFIX,
+        RuleKind.DOMAIN_KEYWORD,
+        RuleKind.DOMAIN_REGEX,
+    }
+)
+
 
 def resolve_datasets(
     rules: Iterable[RuleEntry], policy: CategoryPolicy
@@ -283,16 +292,11 @@ def _entries_overlap(first: RuleEntry, second: RuleEntry) -> bool:
         )
     if first.kind == RuleKind.CIDR or second.kind == RuleKind.CIDR:
         return False
-    if RuleKind.DOMAIN_REGEX in {first.kind, second.kind}:
-        return {
-            first.kind,
-            second.kind,
-        } <= {
-            RuleKind.DOMAIN,
-            RuleKind.DOMAIN_SUFFIX,
-            RuleKind.DOMAIN_KEYWORD,
-            RuleKind.DOMAIN_REGEX,
-        }
+    if {RuleKind.DOMAIN_REGEX, RuleKind.DOMAIN_KEYWORD} & {
+        first.kind,
+        second.kind,
+    }:
+        return {first.kind, second.kind} <= _DOMAIN_RULE_KINDS
     return _domains_overlap(first, second)
 
 

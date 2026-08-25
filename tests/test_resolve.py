@@ -173,6 +173,98 @@ def test_broader_blocked_suffix_removes_contained_direct_exact():
     assert entries(build.lite, "ru") == set()
 
 
+@pytest.mark.parametrize(
+    ("higher_kind", "higher_value", "lower_kind", "lower_value"),
+    [
+        (RuleKind.DOMAIN_KEYWORD, "example", RuleKind.DOMAIN, "api.example.ru"),
+        (RuleKind.DOMAIN_KEYWORD, "example", RuleKind.DOMAIN_SUFFIX, "example.ru"),
+        (RuleKind.DOMAIN_KEYWORD, "example", RuleKind.DOMAIN_KEYWORD, "example"),
+        (RuleKind.DOMAIN, "api.example.ru", RuleKind.DOMAIN_KEYWORD, "example"),
+        (RuleKind.DOMAIN_SUFFIX, "example.ru", RuleKind.DOMAIN_KEYWORD, "example"),
+    ],
+)
+def test_keyword_cross_kind_conflicts_fail_closed_and_are_reported(
+    higher_kind, higher_value, lower_kind, lower_value
+):
+    build = resolve_datasets(
+        (
+            rule(lower_kind, lower_value, "ru"),
+            rule(higher_kind, higher_value, "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == set()
+    assert {
+        (record.higher_entry.kind, record.lower_entry.kind)
+        for record in build.conflicts.resolved
+    } == {(higher_kind, lower_kind)}
+
+
+def test_multiple_disjoint_blockers_split_one_direct_network_without_widening():
+    build = resolve_datasets(
+        (
+            rule(RuleKind.CIDR, "203.0.113.0/24", "ru"),
+            rule(RuleKind.CIDR, "203.0.113.0/26", "blocked"),
+            rule(RuleKind.CIDR, "203.0.113.128/26", "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == {
+        ("cidr", "203.0.113.64/26"),
+        ("cidr", "203.0.113.192/26"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("direct", "same_family_blocker", "other_family_blocker", "expected"),
+    [
+        (
+            "203.0.113.0/24",
+            "203.0.113.0/25",
+            "2001:db8::/32",
+            {("cidr", "203.0.113.128/25")},
+        ),
+        (
+            "2001:db8::/32",
+            "2001:db8::/33",
+            "203.0.113.0/24",
+            {("cidr", "2001:db8:8000::/33")},
+        ),
+    ],
+)
+def test_mixed_ip_family_blocker_sequence_ignores_the_other_family(
+    direct, same_family_blocker, other_family_blocker, expected
+):
+    build = resolve_datasets(
+        (
+            rule(RuleKind.CIDR, direct, "ru"),
+            rule(RuleKind.CIDR, same_family_blocker, "blocked"),
+            rule(RuleKind.CIDR, other_family_blocker, "blocked"),
+        ),
+        policy_for("ru", "blocked"),
+    )
+
+    assert entries(build.lite, "ru") == expected
+
+
+@pytest.mark.parametrize("higher_category", ["blocked", "spy"])
+def test_higher_precedence_category_removes_lite_thematic_but_server_keeps_it(
+    higher_category,
+):
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "video.example", "video"),
+            rule(RuleKind.DOMAIN, "video.example", higher_category),
+        ),
+        policy_for("video", higher_category),
+    )
+
+    assert entries(build.lite, "video") == set()
+    assert entries(build.server, "video") == {("domain", "video.example")}
+
+
 def test_server_is_a_per_shared_category_superset_of_lite():
     build = resolve_datasets(
         (
