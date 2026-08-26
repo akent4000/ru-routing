@@ -12,7 +12,13 @@ from typing import Iterable
 
 import yaml
 
-from .models import Category, Dataset, RuleEntry, RuleKind
+from .models import (
+    Category,
+    Dataset,
+    RuleEntry,
+    RuleKind,
+    category_is_cidr_capable,
+)
 from .resolve import ResolvedBuild
 
 
@@ -173,7 +179,7 @@ def render_geoip_config(dataset: Dataset, path: Path) -> RepresentationReport:
                 "type": "text",
             }
             for category_name, category in _categories(dataset)
-            if _entries(category.entries, {RuleKind.CIDR})
+            if category_is_cidr_capable(category)
         ],
         "output": [
             {

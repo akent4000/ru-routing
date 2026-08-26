@@ -12,13 +12,19 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
 
 from ru_routing.config import load_policy, load_registry
+from ru_routing.fetch import FetchedSource
+from ru_routing.models import RuleKind, category_is_cidr_capable
+from ru_routing.normalize import normalize_sources
+from ru_routing.parsers import GeodataRule
 from ru_routing.render import render_examples
+from ru_routing.resolve import resolve_datasets
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "examples" / "templates"
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -420,21 +426,92 @@ def test_render_examples_is_atomic_and_replaces_stale_files(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+class _FixtureGeodataReader:
+    """A minimal reader honoring the real geoip_dat/geosite_dat contract:
+    geoip_dat artifacts yield CIDR entries, geosite_dat artifacts yield
+    domain entries. This mirrors what the real native decoders in
+    src/ru_routing/parsers.py dispatch on (source.input_type), not a
+    naming guess."""
+
+    def read(self, input_type: str, category: str, artifact: Path):
+        # Values are unique per (input_type, category) so unrelated
+        # canonical categories never collide during resolve_datasets'
+        # cross-category precedence resolution.
+        index = abs(hash((input_type, category))) % 250 + 1
+        if input_type == "geoip_dat":
+            return (GeodataRule(kind=RuleKind.CIDR, value=f"203.0.{index}.0/24"),)
+        return (
+            GeodataRule(kind=RuleKind.DOMAIN_SUFFIX, value=f"fixture{index}.test"),
+        )
+
+
 def _cidr_capable_canonical_categories() -> frozenset[str]:
-    """Derive, from the real source/category config, which canonical
-    categories have at least one CIDR-producing upstream source."""
+    """Derive, from the real source/category config and the real
+    fetch-normalize-resolve pipeline, which canonical categories end up
+    with at least one CIDR entry -- i.e. the same determination
+    render_geoip_config and mihomo_mrs_behaviors make on real resolved
+    data (via models.category_is_cidr_capable), run here against a
+    synthetic fixture build instead of live network fetches."""
 
     registry = load_registry(CONFIG_DIR / "sources.yaml")
     policy = load_policy(CONFIG_DIR / "categories.yaml")
 
-    cidr_capable: set[str] = set()
-    for mapping in policy.source_categories.values():
-        source = registry.resolve(mapping.source)
-        is_cidr_source = source.input_type == "geoip_dat" or (
-            source.input_type == "plain_text" and "cidr" in mapping.source_category
+    fetched: list[FetchedSource] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for source in registry.sources:
+            object_paths: dict[str, tuple[Path, ...]] = {}
+            for category in source.expected_categories:
+                if source.input_type == "plain_text":
+                    path = root / f"{source.name.replace('/', '_')}-{category}.lst"
+                    # Content shape (not the category name) is what the real
+                    # parser (_parse_line) uses to decide domain vs CIDR, so
+                    # fixture content is written to match what each real,
+                    # documented feed actually contains (see the *.lst
+                    # filenames in config/sources.yaml: "*-ipsets.lst" feeds
+                    # are CIDR lists, everything else is a domain list).
+                    locations = source.category_locations.get(category, ())
+                    is_ipset_feed = any(
+                        "ipset" in location for location in locations
+                    )
+                    # Unique per (source, category) for the same collision-
+                    # avoidance reason as _FixtureGeodataReader above.
+                    index = abs(hash((source.name, category))) % 250 + 1
+                    content = (
+                        f"203.0.{index}.0/24\n"
+                        if is_ipset_feed
+                        else f"fixture{index}.test\n"
+                    )
+                    path.write_text(content, encoding="utf-8")
+                    object_paths[category] = (path,)
+                else:
+                    artifact = root / f"{source.name.replace('/', '_')}.dat"
+                    artifact.write_bytes(b"\x00")
+                    object_paths[category] = (artifact,)
+            fetched.append(
+                FetchedSource(
+                    name=source.name,
+                    resolved_revision="fixture",
+                    sha256="0" * 64,
+                    license=source.license,
+                    object_paths=object_paths,
+                    observed_freshness_lag_hours=None,
+                )
+            )
+
+        entries = normalize_sources(
+            fetched,
+            registry=registry,
+            geodata_reader=_FixtureGeodataReader(),
         )
-        if is_cidr_source:
-            cidr_capable.add(mapping.canonical_category)
+
+    build = resolve_datasets(entries, policy)
+
+    cidr_capable: set[str] = set()
+    for dataset in (build.lite, build.server):
+        for name, category in dataset.categories.items():
+            if category_is_cidr_capable(category):
+                cidr_capable.add(name)
     return frozenset(cidr_capable)
 
 

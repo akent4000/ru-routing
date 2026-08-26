@@ -65,6 +65,18 @@ class Category:
         object.__setattr__(self, "entries", frozenset(self.entries))
 
 
+def category_is_cidr_capable(category: Category) -> bool:
+    """Return whether ``category`` has at least one resolved CIDR entry.
+
+    This is the single source of truth for "does this canonical category
+    produce IP/CIDR output" -- used both by native artifact generation
+    (Mihomo ``*-ipcidr.mrs`` emission, v2fly ``geoip.dat`` emission) and by
+    tests that must not reimplement the determination independently.
+    """
+
+    return any(entry.kind == RuleKind.CIDR for entry in category.entries)
+
+
 @dataclass(frozen=True)
 class Dataset:
     """A fully resolved collection of named routing categories."""

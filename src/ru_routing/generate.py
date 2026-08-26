@@ -12,7 +12,7 @@ from typing import Protocol
 
 import yaml
 
-from .models import Category, Dataset, RuleKind
+from .models import Category, Dataset, RuleKind, category_is_cidr_capable
 from .render import (
     render_dlc_sources,
     render_geoip_config,
@@ -256,7 +256,7 @@ def mihomo_mrs_behaviors(category: Category) -> tuple[str, ...]:
         and not kinds & unsupported_domain_kinds
     ):
         behaviors.append("domain")
-    if RuleKind.CIDR in kinds:
+    if category_is_cidr_capable(category):
         behaviors.append("ipcidr")
     return tuple(behaviors)
 
