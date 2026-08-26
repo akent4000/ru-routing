@@ -13,6 +13,7 @@ from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.package import (
     AnomalyError,
     BuildMetadata,
+    PackagingError,
     PolicyConfigs,
     content_fingerprint,
     package_build,
@@ -158,7 +159,7 @@ def test_plan_release_triggers_when_content_changed():
     metadata = _metadata(
         build=_build(extra=True), previous_manifest=_previous_manifest()
     )
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
     assert decision.should_release is True
 
 
@@ -176,7 +177,7 @@ def test_plan_release_triggers_on_policy_only_change_with_unchanged_content():
         built_at="2026-08-26T12:34:00+00:00",
         tool_versions={"xray": "1.0.0"},
     )
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
     assert decision.should_release is True
 
 
@@ -196,7 +197,7 @@ def test_plan_release_reports_no_change_when_both_fingerprints_match():
     # Make the previous manifest's fingerprints equal to the current build's.
     previous["content_fingerprint"] = content_fingerprint(metadata.build)
     previous["policy_fingerprint"] = policy_fingerprint(metadata.policy_configs)
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
     assert decision.should_release is False
     assert decision.reason == "no change"
 
@@ -204,7 +205,7 @@ def test_plan_release_reports_no_change_when_both_fingerprints_match():
 def test_plan_release_computes_version_string_format():
     previous = _previous_manifest()
     metadata = _metadata(build=_build(extra=True), previous_manifest=previous)
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
     fingerprint8 = content_fingerprint(metadata.build)[:8]
     assert decision.version.startswith("2026.08.26.1234-")
     assert decision.version == f"2026.08.26.1234-{fingerprint8}"
@@ -222,14 +223,30 @@ def test_plan_release_fails_on_category_count_anomaly():
     }
     metadata = _metadata(build=_build(extra=True), previous_manifest=previous)
     with pytest.raises(AnomalyError):
-        plan_release(metadata.build, metadata)
+        plan_release(metadata)
 
 
 def test_plan_release_first_build_has_no_previous_manifest_and_releases():
     metadata = _metadata(build=_build(), previous_manifest=None)
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
     assert decision.should_release is True
     assert decision.reason == "initial release"
+
+
+def test_plan_release_raises_on_naive_built_at():
+    resolved_build = _build()
+    metadata = BuildMetadata(
+        build=resolved_build,
+        policy_configs=_policy_configs(),
+        sources=(_fetched_source(),),
+        conflicts=resolved_build.conflicts,
+        thresholds=_DEFAULT_THRESHOLDS,
+        previous_manifest=None,
+        built_at="2026-08-26T12:34:00",  # naive: no tzinfo
+        tool_versions={"xray": "1.0.0"},
+    )
+    with pytest.raises(PackagingError):
+        plan_release(metadata)
 
 
 # --- package_build ---
@@ -321,6 +338,13 @@ def test_package_build_two_runs_are_byte_identical_except_built_at(tmp_path):
     checksums_a = (dist_a / "SHA256SUMS").read_bytes()
     checksums_b = (dist_b / "SHA256SUMS").read_bytes()
     assert checksums_a == checksums_b
+
+
+def test_package_build_raises_when_dist_is_absent(tmp_path):
+    dist = tmp_path / "does-not-exist"
+    metadata = _metadata()
+    with pytest.raises(PackagingError, match="dist directory is absent"):
+        package_build(dist, metadata)
 
 
 # --- archive creation ---

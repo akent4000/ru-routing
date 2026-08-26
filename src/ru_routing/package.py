@@ -77,6 +77,8 @@ class BuildMetadata:
     conflicts: ConflictReport
     thresholds: ThresholdPolicy
     previous_manifest: Mapping[str, object] | None
+    #: Must be a timezone-aware ISO 8601 timestamp (UTC recommended); a
+    #: naive timestamp causes ``_version_string`` to raise ``PackagingError``.
     built_at: str
     tool_versions: Mapping[str, str] = field(default_factory=dict)
 
@@ -184,15 +186,15 @@ def policy_fingerprint(configs: PolicyConfigs) -> str:
     return digest.hexdigest()
 
 
-def plan_release(current: ResolvedBuild, metadata: BuildMetadata) -> ReleaseDecision:
+def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
     """Decide whether to release, compute the version, and check anomalies."""
 
-    current_content = content_fingerprint(current)
+    current_content = content_fingerprint(metadata.build)
     current_policy = policy_fingerprint(metadata.policy_configs)
 
     previous = metadata.previous_manifest
     if previous is None:
-        _check_anomalies(current, metadata, previous=None)
+        _check_anomalies(metadata, previous=None)
         return ReleaseDecision(
             should_release=True,
             version=_version_string(current_content, metadata.built_at),
@@ -205,7 +207,7 @@ def plan_release(current: ResolvedBuild, metadata: BuildMetadata) -> ReleaseDeci
     previous_policy = previous.get("policy_fingerprint")
     changed = current_content != previous_content or current_policy != previous_policy
 
-    _check_anomalies(current, metadata, previous=previous)
+    _check_anomalies(metadata, previous=previous)
 
     if not changed:
         return ReleaseDecision(
@@ -228,12 +230,17 @@ def plan_release(current: ResolvedBuild, metadata: BuildMetadata) -> ReleaseDeci
 
 
 def _version_string(content_digest: str, built_at: str) -> str:
-    timestamp = datetime.fromisoformat(built_at).astimezone(timezone.utc)
+    parsed = datetime.fromisoformat(built_at)
+    if parsed.tzinfo is None:
+        raise PackagingError(
+            f"built_at is a naive timestamp (no timezone info): {built_at!r}; "
+            "expected a timezone-aware ISO 8601 timestamp (UTC recommended)"
+        )
+    timestamp = parsed.astimezone(timezone.utc)
     return f"{timestamp:%Y.%m.%d.%H%M}-{content_digest[:8]}"
 
 
 def _check_anomalies(
-    build: ResolvedBuild,
     metadata: BuildMetadata,
     *,
     previous: Mapping[str, object] | None,
@@ -244,7 +251,7 @@ def _check_anomalies(
     if not isinstance(previous_counts, dict):
         return
     ratio = metadata.thresholds.category_count_change_ratio
-    current_counts = _category_counts(build)
+    current_counts = _category_counts(metadata.build)
     for key, previous_count in previous_counts.items():
         current_count = current_counts.get(key, 0)
         if not isinstance(previous_count, (int, float)) or previous_count <= 0:
@@ -258,7 +265,7 @@ def _check_anomalies(
             )
     previous_size = previous.get("total_size_bytes")
     if isinstance(previous_size, (int, float)) and previous_size > 0:
-        current_size = _content_size_bytes(build)
+        current_size = _content_size_bytes(metadata.build)
         size_ratio = metadata.thresholds.size_change_ratio
         size_change = abs(current_size - previous_size) / previous_size
         if size_change > size_ratio:
@@ -327,7 +334,7 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
     checksums_path.write_text("".join(lines), encoding="utf-8")
     sha256sums_digest = hashlib.sha256(checksums_path.read_bytes()).hexdigest()
 
-    decision = plan_release(metadata.build, metadata)
+    decision = plan_release(metadata)
 
     manifest = Manifest(
         schema_version=metadata.policy_configs.schema_version,
