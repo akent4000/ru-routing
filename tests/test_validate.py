@@ -12,6 +12,8 @@ from ru_routing.tooling import CompletedTool, ToolError
 from ru_routing.validate import (
     ValidationError,
     ValidationThresholds,
+    _mihomo_config,
+    _validate_native,
     validate_build,
 )
 
@@ -310,6 +312,30 @@ def test_validate_build_rebuilds_and_rejects_nondeterministic_artifacts(tmp_path
 
     with pytest.raises(ValidationError, match="nondeterministic artifact"):
         validate_build(build, dist, ValidationThresholds(), _tools(runner))
+
+
+def test_validate_native_rejects_unsafe_category_name(tmp_path):
+    runner = FakeNativeRunner()
+    unsafe = Category(
+        "../evil", frozenset({_entry(RuleKind.DOMAIN, "blocked.example")})
+    )
+    dataset = Dataset({"../evil": unsafe})
+    build = ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    with pytest.raises(ValidationError, match="unsafe category name"):
+        _validate_native(build, dist, _tools(runner))
+
+
+def test_mihomo_config_rejects_unsafe_category_name():
+    unsafe = Category(
+        "../evil", frozenset({_entry(RuleKind.DOMAIN, "blocked.example")})
+    )
+    dataset = Dataset({"../evil": unsafe})
+
+    with pytest.raises(ValidationError, match="unsafe category name"):
+        _mihomo_config("lite", dataset)
 
 
 def test_validate_build_reports_mihomo_mrs_decode_failures(tmp_path):

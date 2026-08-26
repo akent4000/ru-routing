@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 from collections.abc import Sequence
@@ -46,9 +47,11 @@ class NativeTools:
     xray: str = "xray"
 
     def __post_init__(self) -> None:
-        for field_name in ("dlc", "geoip", "sing_box", "mihomo", "xray"):
-            if not getattr(self, field_name):
-                raise ValueError(f"{field_name} executable must not be empty")
+        for field_ in dataclasses.fields(self):
+            if field_.name == "runner":
+                continue
+            if not getattr(self, field_.name):
+                raise ValueError(f"{field_.name} executable must not be empty")
 
 
 @dataclass(frozen=True)

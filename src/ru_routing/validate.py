@@ -274,8 +274,9 @@ def _validate_native(
 
         for dataset_name, dataset in _datasets(build):
             for category_name in sorted(dataset.categories):
-                source = dist / "sing-box" / dataset_name / f"{category_name}.srs"
-                output = work / "sing-box" / dataset_name / f"{category_name}.json"
+                name = _safe_name(category_name)
+                source = dist / "sing-box" / dataset_name / f"{name}.srs"
+                output = work / "sing-box" / dataset_name / f"{name}.json"
                 output.parent.mkdir(parents=True, exist_ok=True)
                 _run_native(
                     tools,
@@ -298,18 +299,19 @@ def _validate_native(
 
         for dataset_name, dataset in _datasets(build):
             for category_name, category in sorted(dataset.categories.items()):
+                name = _safe_name(category_name)
                 for behavior in mihomo_mrs_behaviors(category):
                     source = (
                         dist
                         / "mihomo"
                         / dataset_name
-                        / f"{category_name}-{behavior}.mrs"
+                        / f"{name}-{behavior}.mrs"
                     )
                     output = (
                         work
                         / "mihomo"
                         / dataset_name
-                        / f"{category_name}-{behavior}.txt"
+                        / f"{name}-{behavior}.txt"
                     )
                     output.parent.mkdir(parents=True, exist_ok=True)
                     _run_native(
@@ -399,20 +401,21 @@ def _xray_config(dataset_name: str, dataset: Dataset, dist: Path) -> str:
 def _mihomo_config(dataset_name: str, dataset: Dataset) -> str:
     providers: dict[str, dict[str, object]] = {}
     for category_name, category in sorted(dataset.categories.items()):
-        providers[f"{category_name}-yaml"] = {
+        name = _safe_name(category_name)
+        providers[f"{name}-yaml"] = {
             "type": "file",
             "behavior": "classical",
             "format": "yaml",
-            "path": f"./mihomo/{dataset_name}/{category_name}.yaml",
+            "path": f"./mihomo/{dataset_name}/{name}.yaml",
         }
         for behavior in mihomo_mrs_behaviors(category):
-            providers[f"{category_name}-{behavior}-mrs"] = {
+            providers[f"{name}-{behavior}-mrs"] = {
                 "type": "file",
                 "behavior": behavior,
                 "format": "mrs",
                 "path": (
                     f"./mihomo/{dataset_name}/"
-                    f"{category_name}-{behavior}.mrs"
+                    f"{name}-{behavior}.mrs"
                 ),
             }
     return yaml.safe_dump(
@@ -455,6 +458,17 @@ def _validate_determinism(
             repeated = rebuild / relative
             if not original.is_file() or original.read_bytes() != repeated.read_bytes():
                 raise ValidationError(f"nondeterministic artifact: {relative}")
+        published = {
+            str(path.relative_to(dist))
+            for path in dist.rglob("*")
+            if path.is_file() and path.name not in {"SHA256SUMS", "manifest.json"}
+        }
+        stale = published - set(generated.relative_paths)
+        if stale:
+            raise ValidationError(
+                f"dist contains stale artifacts absent from rebuild: "
+                f"{', '.join(sorted(stale))}"
+            )
     finally:
         _remove_tree(work)
 
