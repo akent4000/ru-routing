@@ -43,24 +43,13 @@
         "outboundTag": "block"
       },
       {
-        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK (domains).",
+        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK (domains). All four are sourced from aireps/geosite (domain-only; no CIDR source), so there is no corresponding IP rule.",
         "type": "field",
         "domain": [
           "ext:geosite.dat:malware",
           "ext:geosite.dat:phishing",
           "ext:geosite.dat:spy",
           "ext:geosite.dat:ads"
-        ],
-        "outboundTag": "block"
-      },
-      {
-        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK (CIDRs).",
-        "type": "field",
-        "ip": [
-          "ext:geoip.dat:malware",
-          "ext:geoip.dat:phishing",
-          "ext:geoip.dat:spy",
-          "ext:geoip.dat:ads"
         ],
         "outboundTag": "block"
       },

@@ -11,14 +11,17 @@ copies and substitutes them into the dist/examples output contract layout.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
+from ru_routing.config import load_policy, load_registry
 from ru_routing.render import render_examples
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "examples" / "templates"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 REQUIRED_TAGS = {"direct", "proxy", "block", "node-example"}
 
@@ -400,6 +403,105 @@ def test_render_examples_is_atomic_and_replaces_stale_files(tmp_path):
 
     assert not (dist / "examples" / "xray" / "stale.json").exists()
     assert (dist / "examples" / "xray" / "lite.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Templates never reference a CIDR/geoip artifact for a domain-only category.
+#
+# render_geoip_config (src/ru_routing/render.py) and the Mihomo *-ipcidr.mrs
+# output (src/ru_routing/generate.py) only ever emit a canonical category into
+# a geoip/ipcidr artifact when at least one of its upstream sources actually
+# produces CIDR entries (source input_type "geoip_dat", or the jutsu-dev
+# "blocked-cidrs" plain_text feed). A canonical category whose every upstream
+# source is domain-only (e.g. geosite_dat) will never appear in geoip.dat /
+# *-ipcidr.mrs, so a template referencing it as an IP-match/rule-provider
+# source is a dangling reference: it will fail Xray's native config test and
+# 404 at runtime for Mihomo's rule-provider fetch.
+# ---------------------------------------------------------------------------
+
+
+def _cidr_capable_canonical_categories() -> frozenset[str]:
+    """Derive, from the real source/category config, which canonical
+    categories have at least one CIDR-producing upstream source."""
+
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    policy = load_policy(CONFIG_DIR / "categories.yaml")
+
+    cidr_capable: set[str] = set()
+    for mapping in policy.source_categories.values():
+        source = registry.resolve(mapping.source)
+        is_cidr_source = source.input_type == "geoip_dat" or (
+            source.input_type == "plain_text" and "cidr" in mapping.source_category
+        )
+        if is_cidr_source:
+            cidr_capable.add(mapping.canonical_category)
+    return frozenset(cidr_capable)
+
+
+def _xray_geoip_categories(document: dict) -> set[str]:
+    """Extract every canonical category referenced via ext:geoip*.dat: in an
+    Xray template's routing rules (i.e. every IP-match geoip reference)."""
+
+    categories: set[str] = set()
+    pattern = re.compile(r"^ext:geoip[^:]*\.dat:(.+)$")
+    for rule in document["routing"]["rules"]:
+        for target in rule.get("ip", []):
+            match = pattern.match(target)
+            if match:
+                categories.add(match.group(1))
+    return categories
+
+
+def _mihomo_ipcidr_categories(document: dict) -> set[str]:
+    """Extract every canonical category with an ipcidr-behavior rule-provider
+    in a Mihomo template."""
+
+    categories: set[str] = set()
+    for name, provider in document.get("rule-providers", {}).items():
+        if provider.get("behavior") == "ipcidr":
+            category = name[: -len("-ipcidr")] if name.endswith("-ipcidr") else name
+            categories.add(category)
+    return categories
+
+
+@pytest.mark.parametrize("name", ["xray-lite.json", "xray-server.json"])
+def test_xray_templates_only_reference_geoip_for_cidr_capable_categories(name):
+    cidr_capable = _cidr_capable_canonical_categories()
+    document = _load_json_template(name)
+    referenced = _xray_geoip_categories(document)
+
+    dangling = referenced - cidr_capable
+    assert not dangling, (
+        f"{name} references ext:geoip*.dat for categories with no CIDR "
+        f"source in config/categories.yaml: {sorted(dangling)}"
+    )
+
+
+@pytest.mark.parametrize("name", ["mihomo-lite.yaml", "mihomo-server.yaml"])
+def test_mihomo_templates_only_declare_ipcidr_providers_for_cidr_capable_categories(
+    name,
+):
+    cidr_capable = _cidr_capable_canonical_categories()
+    document = _load_yaml_template(name)
+    referenced = _mihomo_ipcidr_categories(document)
+
+    dangling = referenced - cidr_capable
+    assert not dangling, (
+        f"{name} declares an ipcidr rule-provider for categories with no "
+        f"CIDR source in config/categories.yaml: {sorted(dangling)}"
+    )
+
+
+def test_domain_only_categories_fixture_sanity():
+    """Guard the test itself: confirm the known domain-only categories this
+    bug class affects are not accidentally classified as CIDR-capable, and
+    known CIDR-capable categories are not accidentally excluded."""
+
+    cidr_capable = _cidr_capable_canonical_categories()
+    for domain_only in ("spy", "malware", "phishing", "ads"):
+        assert domain_only not in cidr_capable
+    for cidr_category in ("ru", "blocked", "ru-geoip", "geoip-global"):
+        assert cidr_category in cidr_capable
 
 
 def test_render_examples_is_deterministic(tmp_path):

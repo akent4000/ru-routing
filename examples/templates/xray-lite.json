@@ -36,15 +36,9 @@
         "outboundTag": "direct"
       },
       {
-        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category).",
+        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category). spy is sourced from aireps/geosite (domain-only; no CIDR source), so there is no corresponding IP rule.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:spy"],
-        "outboundTag": "block"
-      },
-      {
-        "_comment": "2. spy category CIDRs to BLOCK.",
-        "type": "field",
-        "ip": ["ext:geoip-lite.dat:spy"],
         "outboundTag": "block"
       },
       {

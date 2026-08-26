@@ -22,18 +22,13 @@ proxy-groups:
     # by the lite policy; kept for interface parity with the server example.
 
 rule-providers:
+  # spy is sourced from aireps/geosite (domain-only; no CIDR source), so there
+  # is no corresponding spy-ipcidr rule-provider.
   spy:
     type: http
     behavior: domain
     url: "{{CDN_BASE}}/mihomo/lite/spy-domain.mrs"
     path: ./rule-providers/lite-spy-domain.mrs
-    format: mrs
-    interval: 86400
-  spy-ipcidr:
-    type: http
-    behavior: ipcidr
-    url: "{{CDN_BASE}}/mihomo/lite/spy-ipcidr.mrs"
-    path: ./rule-providers/lite-spy-ipcidr.mrs
     format: mrs
     interval: 86400
   blocked:
@@ -78,7 +73,6 @@ rules:
   - PRIVATE,DIRECT
   # 2. spy category to BLOCK (lite's only default-blocked thematic category).
   - RULE-SET,spy,REJECT
-  - RULE-SET,spy-ipcidr,REJECT
   # 3. Explicit Russian blocked domains/IPs to PROXY (prevents unsafe DIRECT
   # matches).
   - RULE-SET,blocked,proxy

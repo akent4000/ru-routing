@@ -33,18 +33,14 @@ proxy-groups:
     # below to route a small representative subset of service categories.
 
 rule-providers:
+  # malware, phishing, spy, and ads are all sourced from aireps/geosite
+  # (domain-only; no CIDR source), so there are no corresponding -ipcidr
+  # rule-providers for these categories.
   malware:
     type: http
     behavior: domain
     url: "{{CDN_BASE}}/mihomo/server/malware-domain.mrs"
     path: ./rule-providers/server-malware-domain.mrs
-    format: mrs
-    interval: 86400
-  malware-ipcidr:
-    type: http
-    behavior: ipcidr
-    url: "{{CDN_BASE}}/mihomo/server/malware-ipcidr.mrs"
-    path: ./rule-providers/server-malware-ipcidr.mrs
     format: mrs
     interval: 86400
   phishing:
@@ -115,7 +111,6 @@ rules:
   - RULE-SET,trackers,REJECT
   # 3. malware, phishing, spy, and ads categories to BLOCK.
   - RULE-SET,malware,REJECT
-  - RULE-SET,malware-ipcidr,REJECT
   - RULE-SET,phishing,REJECT
   - RULE-SET,spy,REJECT
   - RULE-SET,ads,REJECT
