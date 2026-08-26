@@ -58,7 +58,7 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -1101,7 +1101,7 @@ def _build_publish_plan(arguments: argparse.Namespace) -> PublishPlan:
 def _handle_publish(
     arguments: argparse.Namespace,
     *,
-    backend_factory=_default_backend_factory,
+    backend_factory: Callable[[str], PublishBackend] = _default_backend_factory,
 ) -> int:
     try:
         repo = _resolve_repo(arguments)
@@ -1118,7 +1118,7 @@ def _handle_publish(
 def _handle_rollback(
     arguments: argparse.Namespace,
     *,
-    backend_factory=_default_backend_factory,
+    backend_factory: Callable[[str], PublishBackend] = _default_backend_factory,
 ) -> int:
     try:
         repo = _resolve_repo(arguments)
