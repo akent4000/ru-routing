@@ -19,11 +19,16 @@
 # below were resolved from live upstream metadata during Task 10's
 # implementation (2026-08-26). This image was built and exercised
 # end-to-end in that same session: `docker compose run --rm builder build
-# --fixtures tests/fixtures/upstreams/registry --dist /work/dist` completed
-# successfully with the real dlc/geoip/sing-box/mihomo/xray binaries (no
-# --fake-native-tools), and two independent such builds produced a
-# byte-for-byte identical dist/ tree (including manifest.json and
-# SHA256SUMS) -- see the Task 10 report for the exact commands and output.
+# --fixtures tests/fixtures/upstreams/registry --dist /work/output/dist`
+# completed successfully with the real dlc/geoip/sing-box/mihomo/xray
+# binaries (no --fake-native-tools), and two independent such builds
+# produced a byte-for-byte identical dist/ tree (including manifest.json
+# and SHA256SUMS) -- see the Task 10 report for the exact commands and
+# output. Note --dist points inside docker-compose.yml's ./output mount
+# (/work/output/dist), not at the mount point itself: generate_all
+# atomically replaces its --dist directory via os.replace(), and Linux
+# refuses to rename() a bind-mount point, so the mount must be a parent
+# directory one level up from the atomic-swap target.
 # These pins will still go stale over time (upstream releases move on);
 # treat a future digest/checksum mismatch at build time as a signal to
 # re-pin deliberately after re-verifying, not to bypass verification.

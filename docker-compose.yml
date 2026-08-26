@@ -6,7 +6,13 @@ services:
     image: ru-routing-builder:local
     working_dir: /work
     volumes:
-      - ./dist:/work/dist
+      # Mount a parent directory, not the dist directory itself: generate_all
+      # (see src/ru_routing/generate.py's _publish_tree) atomically publishes
+      # its output by os.replace()-ing the destination directory itself, and
+      # Linux refuses to rename() a bind-mount point. Mounting ./output and
+      # passing --dist /work/output/dist keeps the atomic-swap target one
+      # level inside the mount, where renames are unrestricted.
+      - ./output:/work/output
     # Example: docker compose run --rm builder build --fixtures
-    # tests/fixtures/upstreams/registry --dist /work/dist
+    # tests/fixtures/upstreams/registry --dist /work/output/dist
     entrypoint: ["ru-routing"]

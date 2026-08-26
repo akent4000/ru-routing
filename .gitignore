@@ -1,6 +1,7 @@
 .worktrees/
 .superpowers/
 dist/
+output/
 .pytest_cache/
 __pycache__/
 *.pyc

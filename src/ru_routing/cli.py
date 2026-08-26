@@ -53,6 +53,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -740,7 +742,62 @@ def _geodata_reader(arguments: argparse.Namespace):
 
 
 def _run_build(arguments: argparse.Namespace, dist: Path) -> None:
-    """Run fetch-acquisition through package_build; raises PipelineCliError."""
+    """Run fetch-acquisition through package_build against a caller-visible ``dist``.
+
+    Wraps the whole multi-stage sequence in an outer staging directory and
+    only atomically replaces the real ``dist`` once every stage below has
+    succeeded (mirrors the staged-dir-then-``os.replace`` convention already
+    used one level down, inside each individual stage -- see
+    ``generate.py``'s ``_publish_tree``/``render.py``'s ``_staged_directory``).
+    Each inner stage still does its own internal atomic staging-and-replace,
+    but against a path inside this outer staging directory rather than the
+    real ``dist`` -- that inner atomicity keeps each stage's own artifacts
+    internally consistent, while this outer swap ensures the caller never
+    observes a partial cross-stage tree (e.g. generate succeeded but
+    validate/package did not). Without this, a failure after ``generate_all``
+    would otherwise leave the caller-visible ``--dist`` populated with a
+    generate-only partial tree (no manifest.json, no examples/, no
+    SHA256SUMS) despite the command correctly reporting a nonzero exit code.
+    """
+
+    destination = Path(dist)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.tmp-", dir=destination.parent)
+    )
+    try:
+        _run_build_stages(arguments, stage)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    _publish_dist(stage, destination)
+
+
+def _publish_dist(stage: Path, destination: Path) -> None:
+    """Atomically replace ``destination`` with the now-complete ``stage`` tree."""
+
+    backup = destination.with_name(f".{destination.name}.previous")
+    if backup.exists():
+        shutil.rmtree(backup)
+    try:
+        if destination.exists():
+            os.replace(destination, backup)
+        os.replace(stage, destination)
+    except OSError:
+        if backup.exists() and not destination.exists():
+            os.replace(backup, destination)
+        raise
+    else:
+        if backup.exists():
+            shutil.rmtree(backup)
+
+
+def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
+    """Run the generate -> render_examples -> validate -> package sequence.
+
+    ``dist`` here is the outer staging directory ``_run_build`` created, not
+    the caller-visible ``--dist`` path; raises ``PipelineCliError``.
+    """
 
     try:
         registry, policy, threshold_policy = _load_all_configs(arguments.config)

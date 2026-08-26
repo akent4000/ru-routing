@@ -278,6 +278,114 @@ def test_build_requires_either_fixtures_or_inputs(capsys, tmp_path):
     assert "--fixtures" in capsys.readouterr().err
 
 
+def test_build_failure_in_a_late_stage_leaves_a_first_dist_absent(
+    monkeypatch, capsys, tmp_path
+):
+    """Regression test: CLI-level orchestration must be atomic end-to-end.
+
+    Each individual stage (generate_all, render_examples) already publishes
+    atomically on its own, but before this fix ``_run_build`` ran every
+    stage directly against the caller's real ``--dist``, so a failure in a
+    later stage (here, package_build) after generate_all had already
+    succeeded left ``--dist`` populated with a generate-only partial tree
+    (no manifest.json, no SHA256SUMS) despite the nonzero exit code. With
+    the outer staging/atomic-replace wrapper, a first build that fails late
+    must leave ``--dist`` entirely absent.
+    """
+
+    import ru_routing.cli as cli_module
+
+    def _boom(dist, metadata):
+        raise cli_module.PackagingError("forced failure for atomicity test")
+
+    monkeypatch.setattr(cli_module, "package_build", _boom)
+
+    dist = tmp_path / "dist"
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "forced failure for atomicity test" in capsys.readouterr().err
+    assert not dist.exists()
+    # No stray staging/backup siblings left behind either.
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
+
+
+def test_build_failure_in_a_late_stage_leaves_a_prior_dist_unchanged(
+    monkeypatch, capsys, tmp_path
+):
+    """Same as above, but for a *subsequent* build over a previously
+    complete ``--dist``: a late failure must leave the prior complete tree
+    completely unchanged, not overwritten with a partial one.
+    """
+
+    import ru_routing.cli as cli_module
+
+    dist = tmp_path / "dist"
+
+    # First, a real successful build establishes a prior complete state.
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+            "--built-at",
+            "2026-01-01T00:00:00+00:00",
+        ]
+    )
+    assert exit_code == 0
+    prior_manifest = (dist / "manifest.json").read_text(encoding="utf-8")
+    prior_checksums = (dist / "SHA256SUMS").read_text(encoding="utf-8")
+
+    def _boom(dist, metadata):
+        raise cli_module.PackagingError("forced failure for atomicity test")
+
+    monkeypatch.setattr(cli_module, "package_build", _boom)
+
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+            "--built-at",
+            "2026-01-02T00:00:00+00:00",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "forced failure for atomicity test" in capsys.readouterr().err
+    assert dist.is_dir()
+    assert (dist / "manifest.json").read_text(encoding="utf-8") == prior_manifest
+    assert (dist / "SHA256SUMS").read_text(encoding="utf-8") == prior_checksums
+    # No stray outer staging/backup siblings left behind (the first
+    # successful build's release archive, a sibling of dist by design --
+    # see package_build's docstring -- is expected and unrelated).
+    leftovers = {
+        p.name for p in tmp_path.iterdir() if p.name.startswith(".dist")
+    }
+    assert leftovers == set()
+
+
 def test_build_inputs_reads_a_prior_fetch_output_directory_layout(tmp_path, capsys):
     """--inputs reads a directory shaped like fetch_all's own output: an
     objects/ dir of content-addressed blobs and a metadata/ dir of one JSON
