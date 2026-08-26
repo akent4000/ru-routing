@@ -155,6 +155,42 @@ class Manifest:
             "archive_size_bytes": self.archive_size_bytes,
         }
 
+    @classmethod
+    def from_json_dict(cls, data: Mapping[str, object]) -> "Manifest":
+        """Reconstruct a ``Manifest`` from a ``to_json_dict``-shaped document.
+
+        The inverse of ``to_json_dict``. Used by the CLI (Task 11 wiring) to
+        reload a previously written ``manifest.json`` -- either the manifest
+        of the build being published (from ``--dist``) or a historical
+        manifest describing R2's currently-live state (``--previous-manifest``
+        / a target rollback version's manifest) -- as a real ``Manifest``
+        instead of a raw ``dict``, since ``PublishPlan``/``rollback`` need the
+        typed object, not the JSON document. Field-for-field symmetric with
+        ``to_json_dict``'s keys; raises ``KeyError`` if a required field is
+        missing, which is intentional -- a manifest.json missing a required
+        field is malformed and should fail loudly rather than silently
+        default.
+        """
+
+        return cls(
+            schema_version=data["schema_version"],
+            release_version=data["release_version"],
+            content_fingerprint=data["content_fingerprint"],
+            policy_fingerprint=data["policy_fingerprint"],
+            sources=tuple(data["sources"]),
+            category_counts=dict(data["category_counts"]),
+            total_size_bytes=data["total_size_bytes"],
+            artifact_sizes=dict(data["artifact_sizes"]),
+            checksums=dict(data["checksums"]),
+            sha256sums_sha256=data["sha256sums_sha256"],
+            tool_versions=dict(data["tool_versions"]),
+            conflict_statistics=dict(data["conflict_statistics"]),
+            built_at=data["built_at"],
+            archive_filename=data.get("archive_filename"),
+            archive_sha256=data.get("archive_sha256"),
+            archive_size_bytes=data.get("archive_size_bytes"),
+        )
+
 
 def content_fingerprint(build: ResolvedBuild) -> str:
     """Hash only the canonical lite/server dataset content.

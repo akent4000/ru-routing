@@ -261,14 +261,22 @@ def test_release_decision_reports_no_change_against_a_matching_previous_manifest
     assert second["version"] is None
 
 
-@pytest.mark.parametrize("command", ["publish", "rollback"])
-def test_publish_and_rollback_report_not_yet_implemented(command, capsys):
+@pytest.mark.parametrize(
+    ("command", "usage_fragment"),
+    [("publish", "--dist"), ("rollback", "--version")],
+)
+def test_publish_and_rollback_require_their_arguments(command, usage_fragment, capsys):
+    """publish/rollback are wired to the real Task 11 publish.py behavior
+    (see tests/test_cli.py for full coverage against a FakeBackend); here we
+    only confirm the CLI still fails argparse's required-argument check when
+    invoked bare, rather than the old "not yet implemented" stub message.
+    """
+
     exit_code = main([command])
 
-    assert exit_code == 3
+    assert exit_code == 2
     error = capsys.readouterr().err
-    assert "not yet implemented" in error
-    assert "Task 11" in error
+    assert usage_fragment in error
 
 
 def test_build_requires_either_fixtures_or_inputs(capsys, tmp_path):

@@ -2,10 +2,11 @@
 
 Orchestrates the pipeline stages built in Tasks 3-9
 (``fetch``/``parsers``/``normalize``/``resolve``/``generate``/``render``/
-``validate``/``package``) behind the ``fetch``, ``build``, ``check``, and
-``release-decision`` subcommands. ``publish``/``rollback`` only expose their
-argument-parsing surface here; their real behavior depends on Task 11's
-``src/ru_routing/publish.py``, which does not exist yet.
+``validate``/``package``) behind the ``fetch``, ``build``, ``check``,
+``release-decision``, ``publish``, and ``rollback`` subcommands.
+``publish``/``rollback`` wire directly to Task 11's
+``src/ru_routing/publish.py`` (``publish_release``/``rollback``,
+``CliBackend``, ``R2Credentials``/``CloudflareCredentials``).
 
 Stage ordering for ``build``/``check`` (see the design doc's "Build
 Architecture" section for the seven canonical stages: fetch, normalize,
@@ -79,12 +80,25 @@ from .normalize import NormalizationError, normalize_sources
 from .package import (
     AnomalyError,
     BuildMetadata,
+    Manifest,
     PackagingError,
     PolicyConfigs,
     package_build,
     plan_release,
 )
 from .parsers import GeodataRule, ParseError
+from .publish import (
+    CliBackend,
+    CloudflareCredentials,
+    PublishBackend,
+    PublishError,
+    PublishPlan,
+    R2Credentials,
+    publish_release,
+)
+from .publish import (
+    rollback as rollback_release,
+)
 from .render import render_examples
 from .resolve import ResolutionError, resolve_datasets
 from .tooling import CompletedTool, ToolRunner
@@ -93,7 +107,7 @@ from .validate import ValidationError, ValidationThresholds, validate_build
 COMMANDS = ("fetch", "build", "check", "release-decision", "publish", "rollback")
 
 _DEFAULT_CDN_BASE = "https://routing.akent.site/latest"
-_NOT_YET_IMPLEMENTED_EXIT_CODE = 3
+_PUBLISH_ERROR_EXIT_CODE = 4
 
 
 def _default_templates_dir() -> Path:
@@ -145,6 +159,10 @@ def build_parser() -> argparse.ArgumentParser:
             _add_build_arguments(command_parser, require_dist=command == "build")
         elif command == "release-decision":
             _add_release_decision_arguments(command_parser)
+        elif command == "publish":
+            _add_publish_arguments(command_parser)
+        elif command == "rollback":
+            _add_rollback_arguments(command_parser)
         if command == "check":
             command_parser.add_argument(
                 "--config-only",
@@ -279,6 +297,73 @@ def _add_release_decision_arguments(command_parser: argparse.ArgumentParser) -> 
         "--previous-manifest", type=Path, default=None, metavar="FILE"
     )
     command_parser.add_argument("--built-at", default=None, metavar="ISO8601")
+
+
+def _add_repo_argument(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--repo",
+        default=None,
+        metavar="OWNER/NAME",
+        help=(
+            "GitHub repository the release is published to (owner/name); "
+            "defaults to the $GITHUB_REPOSITORY environment variable "
+            "(set automatically by GitHub Actions) if not given"
+        ),
+    )
+
+
+def _add_publish_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--dist",
+        type=Path,
+        required=True,
+        metavar="DIR",
+        help=(
+            "completed build directory to publish, containing manifest.json, "
+            "SHA256SUMS, and every artifact named by manifest.json's "
+            "checksums; the release archive is expected as its sibling "
+            "(<dist's parent>/<version>.tar.gz, per manifest.json's "
+            "archive_filename)"
+        ),
+    )
+    command_parser.add_argument(
+        "--previous-manifest",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "manifest.json currently live in R2 (the root /manifest.json), "
+            "naming the prior version publication cleanup restores "
+            "/latest/* from if this publish fails partway through; omit for "
+            "an initial release with nothing previously published"
+        ),
+    )
+    _add_repo_argument(command_parser)
+
+
+def _add_rollback_arguments(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument(
+        "--version",
+        required=True,
+        metavar="VERSION",
+        help="previously published version to roll /latest/* back to",
+    )
+    command_parser.add_argument(
+        "--target-manifest",
+        type=Path,
+        required=True,
+        metavar="FILE",
+        help=(
+            "local copy of the manifest.json that was published alongside "
+            "--version (e.g. downloaded from "
+            "releases/<version>/manifest.json or restored from a backup); "
+            "rollback does not rebuild anything and has no --dist of its "
+            "own, so this file's checksums are what tell rollback which "
+            "objects under releases/<version>/ to re-copy into /latest/* "
+            "and what sha256 to verify the copy against"
+        ),
+    )
+    _add_repo_argument(command_parser)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -933,26 +1018,120 @@ def _handle_release_decision(arguments: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# publish / rollback: CLI surface only (Task 11 implements the behavior)
+# publish / rollback
 # ---------------------------------------------------------------------------
 
 
-def _handle_publish(arguments: argparse.Namespace) -> int:
-    print(
-        "ru-routing: error: publish is not yet implemented, see Task 11 "
-        "(src/ru_routing/publish.py)",
-        file=sys.stderr,
-    )
-    return _NOT_YET_IMPLEMENTED_EXIT_CODE
+def _default_backend_factory(repo: str) -> PublishBackend:
+    """Build the real, production ``CliBackend`` wired to live credentials.
+
+    Reads R2/Cloudflare credentials from the process environment via
+    ``R2Credentials.from_env``/``CloudflareCredentials.from_env`` (raising
+    ``PublishError`` naming any missing variable -- never a value -- if one
+    is absent). This is the default used by ``_handle_publish``/
+    ``_handle_rollback``; tests instead pass a factory returning a
+    ``FakeBackend`` (see ``backend_factory`` below), the same seam
+    ``_native_tools``/``--fake-native-tools`` uses to keep ``build``
+    testable without the real native toolchain.
+    """
+
+    r2 = R2Credentials.from_env(os.environ)
+    cloudflare = CloudflareCredentials.from_env(os.environ)
+    return CliBackend(r2=r2, cloudflare=cloudflare, repo=repo)
 
 
-def _handle_rollback(arguments: argparse.Namespace) -> int:
-    print(
-        "ru-routing: error: rollback is not yet implemented, see Task 11 "
-        "(src/ru_routing/publish.py)",
-        file=sys.stderr,
+def _resolve_repo(arguments: argparse.Namespace) -> str:
+    repo = getattr(arguments, "repo", None) or os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        raise PublishError(
+            "no repository given: pass --repo or set the $GITHUB_REPOSITORY "
+            "environment variable"
+        )
+    return repo
+
+
+def _load_manifest_file(path: Path) -> Manifest:
+    try:
+        document = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as error:
+        raise PublishError(f"cannot read manifest file {path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise PublishError(
+            f"manifest file {path} is not valid JSON: {error}"
+        ) from error
+    try:
+        return Manifest.from_json_dict(document)
+    except KeyError as error:
+        raise PublishError(
+            f"manifest file {path} is missing required field {error}"
+        ) from error
+
+
+def _build_publish_plan(arguments: argparse.Namespace) -> PublishPlan:
+    dist = Path(arguments.dist)
+    manifest_path = dist / "manifest.json"
+    if not manifest_path.is_file():
+        raise PublishError(f"no manifest.json found in --dist directory {dist}")
+    manifest = _load_manifest_file(manifest_path)
+
+    if not manifest.archive_filename:
+        raise PublishError(
+            f"manifest.json in {dist} has no archive_filename; it does not "
+            "look like a completed, packaged build"
+        )
+    archive_path = dist.parent / manifest.archive_filename
+    if not archive_path.is_file():
+        raise PublishError(
+            f"release archive {archive_path} (named by manifest.json's "
+            "archive_filename) does not exist next to --dist"
+        )
+
+    previous_manifest = None
+    if arguments.previous_manifest is not None:
+        previous_manifest = _load_manifest_file(arguments.previous_manifest)
+
+    return PublishPlan(
+        manifest=manifest,
+        dist=dist,
+        archive_path=archive_path,
+        previous_manifest=previous_manifest,
     )
-    return _NOT_YET_IMPLEMENTED_EXIT_CODE
+
+
+def _handle_publish(
+    arguments: argparse.Namespace,
+    *,
+    backend_factory=_default_backend_factory,
+) -> int:
+    try:
+        repo = _resolve_repo(arguments)
+        plan = _build_publish_plan(arguments)
+        backend = backend_factory(repo)
+        version = publish_release(plan, backend)
+    except PublishError as error:
+        print(f"ru-routing: publish failed: {error}", file=sys.stderr)
+        return _PUBLISH_ERROR_EXIT_CODE
+    print(f"ru-routing: published {version}")
+    return 0
+
+
+def _handle_rollback(
+    arguments: argparse.Namespace,
+    *,
+    backend_factory=_default_backend_factory,
+) -> int:
+    try:
+        repo = _resolve_repo(arguments)
+        target_manifest = _load_manifest_file(arguments.target_manifest)
+        backend = backend_factory(repo)
+        version = rollback_release(
+            arguments.version, backend, checksums=target_manifest.checksums
+        )
+    except PublishError as error:
+        print(f"ru-routing: rollback failed: {error}", file=sys.stderr)
+        return _PUBLISH_ERROR_EXIT_CODE
+    print(f"ru-routing: rolled back to {version}")
+    return 0
 
 
 _HANDLERS = {
