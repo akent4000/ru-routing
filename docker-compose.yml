@@ -1,0 +1,12 @@
+services:
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ru-routing-builder:local
+    working_dir: /work
+    volumes:
+      - ./dist:/work/dist
+    # Example: docker compose run --rm builder build --fixtures
+    # tests/fixtures/upstreams/registry --dist /work/dist
+    entrypoint: ["ru-routing"]
