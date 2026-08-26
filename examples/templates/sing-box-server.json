@@ -1,0 +1,68 @@
+{
+  "_comment": "RU routing pipeline - sing-box server example. Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time by ru_routing.render.render_examples. node-example is a documented placeholder outbound tag: replace its address/credentials with a real inter-node deployment before use.",
+  "_version": "{{VERSION}}",
+  "_bittorrent_parity_comment": "NON-PARITY NOTICE: sing-box does not expose an Xray-equivalent 'protocol: [\"bittorrent\"]' traffic-classification rule. Its closest native mechanisms are the 'network'/'protocol' sniffer fields plus 'process_name'/'package_name' rules on supported platforms, none of which reliably classify BitTorrent traffic the way Xray's built-in protocol sniffing does. This example applies the strongest supported policy instead: it enables sniffing and blocks by the 'protocol' condition where the sniffer can label a connection 'bittorrent', but it does not claim full parity with Xray's dedicated BitTorrent detection. Tracker-domain categories (see the 'trackers' rule_set) are an additional layer, not a replacement for protocol detection.",
+  "route": {
+    "rule_set": [
+      {"tag": "malware", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/malware.srs", "download_detour": "direct"},
+      {"tag": "phishing", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/phishing.srs", "download_detour": "direct"},
+      {"tag": "spy", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/spy.srs", "download_detour": "direct"},
+      {"tag": "ads", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ads.srs", "download_detour": "direct"},
+      {"tag": "google", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/google.srs", "download_detour": "direct"},
+      {"tag": "youtube", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/youtube.srs", "download_detour": "direct"},
+      {"tag": "ru", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru.srs", "download_detour": "direct"},
+      {"tag": "ru-inside", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru-inside.srs", "download_detour": "direct"}
+    ],
+    "rules": [
+      {
+        "_comment": "1. Private/local traffic to DIRECT via sing-box's native ip_is_private condition, not custom geodata.",
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "_comment": "2. BitTorrent-labeled traffic to BLOCK using sing-box's connection sniffer. See _bittorrent_parity_comment: this is the strongest supported approximation, not full parity with Xray's protocol rule.",
+        "protocol": ["bittorrent"],
+        "outbound": "block"
+      },
+      {
+        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK.",
+        "rule_set": ["malware", "phishing", "spy", "ads"],
+        "outbound": "block"
+      },
+      {
+        "_comment": "4. Example service categories (google, youtube) routed to the node-example placeholder inter-node outbound. Replace node-example before deployment.",
+        "rule_set": ["google", "youtube"],
+        "outbound": "node-example"
+      },
+      {
+        "_comment": "Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
+        "rule_set": ["ru", "ru-inside"],
+        "outbound": "direct"
+      }
+    ],
+    "final": "direct",
+    "_final_comment": "5. Unmatched traffic to DIRECT: the server dataset runs on the egress node itself, so a conservative PROXY-style default would misroute the node's own general traffic. Exceptions are handled by the explicit BLOCK rule_sets and named service outbounds above."
+  },
+  "inbounds": [],
+  "outbounds": [
+    {
+      "tag": "direct",
+      "type": "direct",
+      "_comment": "Default outbound (route.final)."
+    },
+    {
+      "tag": "proxy",
+      "type": "direct",
+      "_comment": "Optional additional upstream outbound for this deployment; not used by the default server policy above."
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    },
+    {
+      "tag": "node-example",
+      "type": "direct",
+      "_comment": "PLACEHOLDER outbound tag for deployment-specific inter-node routing. Replace address/credentials with a real node address/credentials before deployment. Used above to route a small representative subset of service categories."
+    }
+  ]
+}

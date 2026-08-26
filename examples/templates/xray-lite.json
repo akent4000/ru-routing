@@ -1,0 +1,80 @@
+{
+  "_comment": "RU routing pipeline - Xray lite example. Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time by ru_routing.render.render_examples. node-example is a documented placeholder outbound tag: replace its address/credentials with a real inter-node deployment before use.",
+  "_version": "{{VERSION}}",
+  "_default_outbound_comment": "5. Unmatched traffic to PROXY. Xray uses the first entry of 'outbounds' as the default when no routing rule matches, so 'proxy' is declared first here: lite protects a client behind a VPN, so unrecognized destinations must not silently bypass the tunnel.",
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "freedom",
+      "settings": {},
+      "_comment": "Default outbound (first entry). Replace with the real upstream/VPN outbound (vless, vmess, trojan, ...) for your deployment."
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {}
+    },
+    {
+      "tag": "node-example",
+      "protocol": "freedom",
+      "settings": {},
+      "_comment": "PLACEHOLDER outbound tag for deployment-specific inter-node routing. Replace address/credentials before deployment. Not used by the lite policy; kept for interface parity with the server example."
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "_comment": "1. Private/local traffic to DIRECT via Xray's built-in geoip:private, not custom geodata.",
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category).",
+        "type": "field",
+        "domain": ["ext:geosite-lite.dat:spy"],
+        "outboundTag": "block"
+      },
+      {
+        "_comment": "2. spy category CIDRs to BLOCK.",
+        "type": "field",
+        "ip": ["ext:geoip-lite.dat:spy"],
+        "outboundTag": "block"
+      },
+      {
+        "_comment": "3. Explicit Russian blocked domains/IPs to PROXY (prevents unsafe DIRECT matches).",
+        "type": "field",
+        "domain": ["ext:geosite-lite.dat:blocked"],
+        "outboundTag": "proxy"
+      },
+      {
+        "_comment": "3. Explicit Russian blocked CIDRs to PROXY.",
+        "type": "field",
+        "ip": ["ext:geoip-lite.dat:blocked"],
+        "outboundTag": "proxy"
+      },
+      {
+        "_comment": "4. Trusted RU and Russia-only traffic to DIRECT.",
+        "type": "field",
+        "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "4. Trusted RU and Russia-only CIDRs to DIRECT.",
+        "type": "field",
+        "ip": ["ext:geoip-lite.dat:ru"],
+        "outboundTag": "direct"
+      }
+    ]
+  },
+  "_download": {
+    "geosite-lite.dat": "{{CDN_BASE}}/xray/geosite-lite.dat",
+    "geoip-lite.dat": "{{CDN_BASE}}/xray/geoip-lite.dat"
+  }
+}

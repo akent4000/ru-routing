@@ -1,0 +1,93 @@
+# RU routing pipeline - Mihomo lite example.
+# Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time
+# by ru_routing.render.render_examples.
+# node-example is a documented placeholder proxy tag for deployment-specific
+# inter-node routing: replace its address/credentials with a real inter-node
+# deployment before use.
+
+version: "{{VERSION}}"
+
+proxies:
+  - name: proxy
+    type: direct
+    # PLACEHOLDER: replace with the real upstream/VPN proxy (shadowsocks, vmess,
+    # trojan, ...) for your deployment.
+
+proxy-groups:
+  - name: node-example
+    type: select
+    proxies: [proxy]
+    # PLACEHOLDER proxy group for deployment-specific inter-node routing.
+    # Replace with a real node address/credentials before deployment. Not used
+    # by the lite policy; kept for interface parity with the server example.
+
+rule-providers:
+  spy:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/spy-domain.mrs"
+    path: ./rule-providers/lite-spy-domain.mrs
+    format: mrs
+    interval: 86400
+  spy-ipcidr:
+    type: http
+    behavior: ipcidr
+    url: "{{CDN_BASE}}/mihomo/lite/spy-ipcidr.mrs"
+    path: ./rule-providers/lite-spy-ipcidr.mrs
+    format: mrs
+    interval: 86400
+  blocked:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/blocked-domain.mrs"
+    path: ./rule-providers/lite-blocked-domain.mrs
+    format: mrs
+    interval: 86400
+  blocked-ipcidr:
+    type: http
+    behavior: ipcidr
+    url: "{{CDN_BASE}}/mihomo/lite/blocked-ipcidr.mrs"
+    path: ./rule-providers/lite-blocked-ipcidr.mrs
+    format: mrs
+    interval: 86400
+  ru:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/ru-domain.mrs"
+    path: ./rule-providers/lite-ru-domain.mrs
+    format: mrs
+    interval: 86400
+  ru-ipcidr:
+    type: http
+    behavior: ipcidr
+    url: "{{CDN_BASE}}/mihomo/lite/ru-ipcidr.mrs"
+    path: ./rule-providers/lite-ru-ipcidr.mrs
+    format: mrs
+    interval: 86400
+  ru-inside:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/ru-inside-domain.mrs"
+    path: ./rule-providers/lite-ru-inside-domain.mrs
+    format: mrs
+    interval: 86400
+
+rules:
+  # 1. Private/local traffic to DIRECT via Mihomo's native PRIVATE rule
+  # keyword, not custom geodata.
+  - PRIVATE,DIRECT
+  # 2. spy category to BLOCK (lite's only default-blocked thematic category).
+  - RULE-SET,spy,REJECT
+  - RULE-SET,spy-ipcidr,REJECT
+  # 3. Explicit Russian blocked domains/IPs to PROXY (prevents unsafe DIRECT
+  # matches).
+  - RULE-SET,blocked,proxy
+  - RULE-SET,blocked-ipcidr,proxy
+  # 4. Trusted RU and Russia-only traffic to DIRECT.
+  - RULE-SET,ru,DIRECT
+  - RULE-SET,ru-ipcidr,DIRECT
+  - RULE-SET,ru-inside,DIRECT
+  # 5. Unmatched traffic to PROXY (final MATCH rule): lite protects a client
+  # behind a VPN, so unrecognized destinations must not silently bypass the
+  # tunnel.
+  - MATCH,proxy

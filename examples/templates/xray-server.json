@@ -1,0 +1,91 @@
+{
+  "_comment": "RU routing pipeline - Xray server example. Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time by ru_routing.render.render_examples. node-example is a documented placeholder outbound tag: replace its address/credentials with a real inter-node deployment before use.",
+  "_version": "{{VERSION}}",
+  "_default_outbound_comment": "5. Unmatched traffic to DIRECT. Xray uses the first entry of 'outbounds' as the default when no routing rule matches, so 'direct' is declared first here: the server dataset runs on the egress node itself, so a conservative PROXY-style default would misroute the node's own general traffic. Exceptions are handled by the explicit BLOCK categories and named service outbounds below.",
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {},
+      "_comment": "Default outbound (first entry)."
+    },
+    {
+      "tag": "proxy",
+      "protocol": "freedom",
+      "settings": {},
+      "_comment": "Optional additional upstream outbound for this deployment; not used by the default server policy below."
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {}
+    },
+    {
+      "tag": "node-example",
+      "protocol": "freedom",
+      "settings": {},
+      "_comment": "PLACEHOLDER outbound tag for deployment-specific inter-node routing. Replace address/credentials with a real node address/credentials before deployment. Used below to route a small representative subset of service categories."
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "_comment": "1. Private/local traffic to DIRECT via Xray's built-in geoip:private, not custom geodata.",
+        "type": "field",
+        "ip": ["geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "2. BitTorrent protocol traffic to BLOCK. This is Xray's native protocol-detection rule (protocol sniffing), not a domain/IP list.",
+        "type": "field",
+        "protocol": ["bittorrent"],
+        "outboundTag": "block"
+      },
+      {
+        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK (domains).",
+        "type": "field",
+        "domain": [
+          "ext:geosite.dat:malware",
+          "ext:geosite.dat:phishing",
+          "ext:geosite.dat:spy",
+          "ext:geosite.dat:ads"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK (CIDRs).",
+        "type": "field",
+        "ip": [
+          "ext:geoip.dat:malware",
+          "ext:geoip.dat:phishing",
+          "ext:geoip.dat:spy",
+          "ext:geoip.dat:ads"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "_comment": "4. Example service categories (google, youtube) routed to the node-example placeholder inter-node outbound. Replace node-example before deployment.",
+        "type": "field",
+        "domain": ["ext:geosite.dat:google", "ext:geosite.dat:youtube"],
+        "outboundTag": "node-example"
+      },
+      {
+        "_comment": "Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
+        "type": "field",
+        "domain": ["ext:geosite.dat:ru", "ext:geosite.dat:ru-inside"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "Trusted RU and Russia-only CIDRs to DIRECT.",
+        "type": "field",
+        "ip": ["ext:geoip.dat:ru", "ext:geoip.dat:ru-geoip"],
+        "outboundTag": "direct"
+      }
+    ]
+  },
+  "_download": {
+    "geosite.dat": "{{CDN_BASE}}/xray/geosite.dat",
+    "geoip.dat": "{{CDN_BASE}}/xray/geoip.dat"
+  }
+}

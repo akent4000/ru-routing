@@ -1,0 +1,135 @@
+# RU routing pipeline - Mihomo server example.
+# Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time
+# by ru_routing.render.render_examples.
+# node-example is a documented placeholder proxy tag for deployment-specific
+# inter-node routing: replace its address/credentials with a real inter-node
+# deployment before use.
+#
+# NON-PARITY NOTICE (BitTorrent): Mihomo has no native rule type that
+# classifies traffic by BitTorrent protocol the way Xray's
+# `protocol: ["bittorrent"]` routing rule does. Mihomo's closest tools
+# (PROCESS-NAME/PROCESS-PATH) identify traffic by the local OS process, which
+# does not apply on a server/gateway node relaying other clients' connections,
+# and there is no packet-inspection-based protocol classifier exposed in
+# classical rule syntax. This example does not claim BitTorrent protocol
+# parity with Xray; it relies on the `trackers` rule-set below (tracker
+# announce/scrape domains) as the strongest supported approximation, layered
+# on top of, not a replacement for, true protocol detection.
+
+version: "{{VERSION}}"
+
+proxies:
+  - name: proxy
+    type: direct
+    # Optional additional upstream proxy for this deployment; not used by the
+    # default server policy below.
+
+proxy-groups:
+  - name: node-example
+    type: select
+    proxies: [proxy]
+    # PLACEHOLDER proxy group for deployment-specific inter-node routing.
+    # Replace with a real node address/credentials before deployment. Used
+    # below to route a small representative subset of service categories.
+
+rule-providers:
+  malware:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/malware-domain.mrs"
+    path: ./rule-providers/server-malware-domain.mrs
+    format: mrs
+    interval: 86400
+  malware-ipcidr:
+    type: http
+    behavior: ipcidr
+    url: "{{CDN_BASE}}/mihomo/server/malware-ipcidr.mrs"
+    path: ./rule-providers/server-malware-ipcidr.mrs
+    format: mrs
+    interval: 86400
+  phishing:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/phishing-domain.mrs"
+    path: ./rule-providers/server-phishing-domain.mrs
+    format: mrs
+    interval: 86400
+  spy:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/spy-domain.mrs"
+    path: ./rule-providers/server-spy-domain.mrs
+    format: mrs
+    interval: 86400
+  ads:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/ads-domain.mrs"
+    path: ./rule-providers/server-ads-domain.mrs
+    format: mrs
+    interval: 86400
+  trackers:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/trackers-domain.mrs"
+    path: ./rule-providers/server-trackers-domain.mrs
+    format: mrs
+    interval: 86400
+  google:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/google-domain.mrs"
+    path: ./rule-providers/server-google-domain.mrs
+    format: mrs
+    interval: 86400
+  youtube:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/youtube-domain.mrs"
+    path: ./rule-providers/server-youtube-domain.mrs
+    format: mrs
+    interval: 86400
+  ru:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/ru-domain.mrs"
+    path: ./rule-providers/server-ru-domain.mrs
+    format: mrs
+    interval: 86400
+  ru-inside:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/ru-inside-domain.mrs"
+    path: ./rule-providers/server-ru-inside-domain.mrs
+    format: mrs
+    interval: 86400
+
+rules:
+  # 1. Private/local traffic to DIRECT via Mihomo's native PRIVATE rule
+  # keyword, not custom geodata.
+  - PRIVATE,DIRECT
+  # 2. BitTorrent traffic to BLOCK: see the NON-PARITY NOTICE above. Mihomo
+  # has no native BitTorrent protocol-detection rule, so the tracker-domain
+  # rule-set is applied as the strongest supported approximation, layered on
+  # the malware/phishing/spy/ads blocking below.
+  - RULE-SET,trackers,REJECT
+  # 3. malware, phishing, spy, and ads categories to BLOCK.
+  - RULE-SET,malware,REJECT
+  - RULE-SET,malware-ipcidr,REJECT
+  - RULE-SET,phishing,REJECT
+  - RULE-SET,spy,REJECT
+  - RULE-SET,ads,REJECT
+  # 4. Example service categories (google, youtube) routed to the
+  # node-example placeholder inter-node proxy group. Replace node-example
+  # before deployment.
+  - RULE-SET,google,node-example
+  - RULE-SET,youtube,node-example
+  # Trusted RU and Russia-only traffic to DIRECT, matching the shared
+  # lite/server policy base.
+  - RULE-SET,ru,DIRECT
+  - RULE-SET,ru-inside,DIRECT
+  # 5. Unmatched traffic to DIRECT (final MATCH rule): the server dataset
+  # runs on the egress node itself, so a conservative PROXY-style default
+  # would misroute the node's own general traffic. Exceptions are handled by
+  # the explicit BLOCK rule-sets and named service outbounds above.
+  - MATCH,DIRECT

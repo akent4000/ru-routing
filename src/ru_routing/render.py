@@ -76,6 +76,49 @@ _RULE_ORDER = {
     RuleKind.CIDR: 4,
 }
 
+# Templates under examples/templates/ carry two placeholder tokens that
+# render_examples substitutes with the actual build's values: {{VERSION}}
+# becomes the release version string, and {{CDN_BASE}} becomes the stable
+# "/latest" CDN base URL (see the design doc's Publication and CDN section).
+_EXAMPLE_TEMPLATES = (
+    ("xray-lite.json", "xray/lite.json"),
+    ("xray-server.json", "xray/server.json"),
+    ("sing-box-lite.json", "sing-box/lite.json"),
+    ("sing-box-server.json", "sing-box/server.json"),
+    ("mihomo-lite.yaml", "mihomo/lite.yaml"),
+    ("mihomo-server.yaml", "mihomo/server.yaml"),
+)
+
+
+def render_examples(
+    templates_dir: Path,
+    dist: Path,
+    version: str,
+    cdn_base: str = "https://routing.akent.site/latest",
+) -> tuple[str, ...]:
+    """Atomically copy example templates into ``dist/examples`` with tokens filled in.
+
+    ``templates_dir`` holds the source files committed under
+    ``examples/templates``. Each file's ``{{VERSION}}`` and ``{{CDN_BASE}}``
+    placeholder tokens (see _EXAMPLE_TEMPLATES above) are substituted before
+    the file is written to its documented Output Contract location under
+    ``dist/examples``. Returns the sorted relative paths written.
+    """
+
+    templates_root = Path(templates_dir)
+    examples = Path(dist) / "examples"
+    written: list[str] = []
+    with _staged_directory(examples) as stage:
+        for template_name, relative_output in _EXAMPLE_TEMPLATES:
+            source_path = templates_root / template_name
+            content = source_path.read_text(encoding="utf-8")
+            content = content.replace("{{VERSION}}", version).replace(
+                "{{CDN_BASE}}", cdn_base
+            )
+            _write_text(stage / relative_output, content)
+            written.append(relative_output)
+    return tuple(sorted(written))
+
 
 def render_raw(build: ResolvedBuild, dist: Path) -> RepresentationReport:
     """Atomically replace ``dist/raw`` with readable lite and server lists.
