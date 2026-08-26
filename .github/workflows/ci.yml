@@ -1,0 +1,102 @@
+name: CI
+
+# Fixture-only PR validation (design doc "Validation and Failure Handling":
+# "pull-request validation builds exclusively from these committed
+# fixtures rather than live upstream fetches, so PR checks are not subject
+# to upstream flakiness or rate limits. A separate, independently
+# scheduled integration path exercises live sources and is not a gate for
+# merging a pull request.").
+#
+# This workflow MUST NEVER reference R2/Cloudflare/GitHub-release secrets
+# and MUST NEVER perform a live upstream fetch or publish anything -- see
+# tests/test_workflows.py for the assertions that pin this down.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least-privilege, workflow-level default: read-only. No job in this file
+# needs to write repository contents, create releases, or touch R2/
+# Cloudflare -- fixture-only validation never publishes anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, unit tests, fixture build/validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and dev dependencies
+        run: python -m pip install --no-cache-dir -e . pytest ruff
+
+      - name: ruff check
+        id: ruff
+        run: ruff check . 2>&1 | tee ruff-output.log
+
+      - name: pytest (unit/integration test suite)
+        id: pytest
+        run: pytest -q 2>&1 | tee pytest-output.log
+
+      - name: python -m compileall
+        run: python3 -m compileall -q src
+
+      - name: Fixture-driven check (no live network, no native toolchain)
+        id: fixture_check
+        run: |
+          ru-routing check \
+            --fixtures tests/fixtures/upstreams/registry \
+            --fake-native-tools \
+            2>&1 | tee fixture-check-output.log
+
+      - name: actionlint
+        if: always()
+        id: actionlint
+        run: |
+          if command -v actionlint >/dev/null 2>&1; then
+            actionlint .github/workflows/*.yml
+          else
+            echo "actionlint not installed on this runner; downloading pinned release"
+            bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+            ./actionlint .github/workflows/*.yml
+          fi
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## CI summary"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| ruff | ${{ steps.ruff.outcome }} |"
+            echo "| pytest | ${{ steps.pytest.outcome }} |"
+            echo "| fixture check (build+validate) | ${{ steps.fixture_check.outcome }} |"
+            echo "| actionlint | ${{ steps.actionlint.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-logs
+          path: |
+            ruff-output.log
+            pytest-output.log
+            fixture-check-output.log
+          if-no-files-found: ignore
+          retention-days: 14

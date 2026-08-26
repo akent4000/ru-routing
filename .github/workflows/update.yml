@@ -1,0 +1,200 @@
+name: Hourly routing release
+
+# Live fetch/build/publish path (design doc "Change Detection and
+# Versioning": "GitHub Actions runs hourly and supports `workflow_dispatch`.
+# A concurrency group prevents overlapping publication runs.").
+#
+# This is the ONLY workflow that ever runs `ru-routing fetch` (live),
+# `ru-routing build --inputs`, or `ru-routing publish`. ci.yml (PR
+# validation) must never do any of these -- see tests/test_workflows.py.
+#
+# Design notes (see the Task 12 implementer's final report for detail):
+#
+#   - `ru-routing release-decision --inputs` cannot be used as a cheap
+#     pre-build check: `_geodata_reader()` in src/ru_routing/cli.py raises
+#     PipelineCliError for --inputs because no real GeodataReader exists
+#     yet for decoding live-fetched geoip_dat/geosite_dat binaries (only
+#     --fixtures is supported there). So this workflow always pays for a
+#     full `ru-routing build --inputs`, and treats manifest.json's
+#     `release_version` field (null when plan_release decided "no
+#     change", a version string otherwise -- package_build always writes
+#     manifest.json, regardless of the release decision) as the actual,
+#     structural gate for whether `ru-routing publish` runs at all.
+#   - The real pinned native toolchain (dlc/geoip/sing-box/mihomo/xray)
+#     only exists inside the Task 10 Docker builder image, so the live
+#     `fetch` + real `build` + `publish` all run inside that image via
+#     `docker compose run`, never bare on the runner.
+#   - `--previous-manifest` is satisfied by curl-ing the currently live
+#     `/manifest.json` from R2's public custom domain before the build;
+#     a 404 (first-ever release) is tolerated and simply omits
+#     --previous-manifest, matching `plan_release`'s documented
+#     "previous is None -> initial release" behavior.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch: {}
+
+# Minimal permissions: contents: write is needed only to create the
+# GitHub Release that `ru-routing publish` (via CliBackend) creates via
+# the `gh`/GitHub API using the workflow's own scoped token. Nothing
+# broader is granted.
+permissions:
+  contents: write
+
+# Never cancel a publish mid-flight (partially uploaded /releases/<version>
+# tree or a stuck manifest pointer would be worse than a queued rerun);
+# instead, overlapping scheduled/manual runs queue behind each other.
+concurrency:
+  group: update-routing-release
+  cancel-in-progress: false
+
+env:
+  # Non-sensitive identifiers (GitHub Actions "variables" per Task 13's
+  # documented split): bucket name, R2 S3-compatible endpoint URL, and
+  # Cloudflare zone id. R2_ACCOUNT_ID/access keys and the Cloudflare API
+  # token are sensitive and are passed as `secrets.*` directly to the
+  # steps/backend that need them, not exported workflow-wide.
+  R2_BUCKET: ${{ vars.R2_BUCKET }}
+  R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+  CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+  MANIFEST_URL: https://routing.akent.site/manifest.json
+
+jobs:
+  release:
+    name: Fetch, build, and (conditionally) publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (or reuse cached) builder image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          tags: ru-routing-builder:local
+          load: true
+          # GitHub Actions cache backend for Docker layer caching: the
+          # pinned native-toolchain build (Go compiles + release-binary
+          # downloads) is the expensive part of this image and rarely
+          # changes between hourly runs, so caching it here is the
+          # difference between a multi-minute and a near-instant image
+          # build on an unchanged Dockerfile.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prepare output directory
+        run: |
+          mkdir -p output
+          chmod 777 output
+
+      - name: Fetch currently-live manifest.json (previous release pointer)
+        id: previous_manifest
+        run: |
+          set -eu
+          if curl -fsSL -o output/previous-manifest.json "$MANIFEST_URL"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no live manifest.json yet (first release) -- continuing without --previous-manifest"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Live fetch
+        run: |
+          docker compose run --rm builder \
+            fetch --destination /work/output/fetched
+
+      - name: Build (real native toolchain, live inputs)
+        id: build
+        run: |
+          set -eu
+          previous_manifest_args=()
+          if [ "${{ steps.previous_manifest.outputs.found }}" = "true" ]; then
+            previous_manifest_args=(--previous-manifest /work/output/previous-manifest.json)
+          fi
+          docker compose run --rm builder \
+            build --inputs /work/output/fetched \
+            --dist /work/output/dist \
+            "${previous_manifest_args[@]}"
+
+      - name: Read release decision from manifest.json
+        id: release_decision
+        run: |
+          set -eu
+          RELEASE_VERSION=$(python3 -c "import json; print(json.load(open('output/dist/manifest.json')).get('release_version') or '')")
+          if [ -n "$RELEASE_VERSION" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish
+        id: publish
+        # Structural gate: this step (and everything it could do) is
+        # skipped entirely -- not merely a shell-level no-op -- unless the
+        # build's own manifest.json reported a non-null release_version.
+        # An unchanged run therefore cannot invoke `ru-routing publish` at
+        # all.
+        if: steps.release_decision.outputs.should_publish == 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -eu
+          previous_manifest_args=()
+          if [ "${{ steps.previous_manifest.outputs.found }}" = "true" ]; then
+            previous_manifest_args=(--previous-manifest /work/output/previous-manifest.json)
+          fi
+          docker compose run --rm \
+            -e R2_ACCOUNT_ID -e R2_ACCESS_KEY_ID -e R2_SECRET_ACCESS_KEY \
+            -e R2_BUCKET -e R2_ENDPOINT_URL \
+            -e CLOUDFLARE_ZONE_ID -e CLOUDFLARE_API_TOKEN \
+            -e GITHUB_REPOSITORY \
+            builder \
+            publish --dist /work/output/dist \
+            "${previous_manifest_args[@]}" \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Hourly routing release summary"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Previous manifest found | ${{ steps.previous_manifest.outputs.found }} |"
+            echo "| Build outcome | ${{ steps.build.outcome }} |"
+            echo "| Release decision | ${{ steps.release_decision.outputs.should_publish == 'true' && format('release {0}', steps.release_decision.outputs.version) || 'no change' }} |"
+            echo "| Publish outcome | ${{ steps.publish.outcome }} |"
+            if [ -f output/dist/manifest.json ]; then
+              echo
+              echo "### Category counts"
+              echo
+              echo '```json'
+              python3 -c "import json; print(json.dumps(json.load(open('output/dist/manifest.json')).get('category_counts', {}), indent=2, sort_keys=True))" || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build/validation logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-failure-logs
+          path: |
+            output/dist/manifest.json
+            output/previous-manifest.json
+          if-no-files-found: ignore
+          retention-days: 14
