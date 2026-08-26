@@ -12,13 +12,19 @@ This stage consumes the ``dist`` tree already produced by Tasks 6-8
 - writes ``SHA256SUMS`` (covering every public artifact except itself and
   ``manifest.json``) and then ``manifest.json`` last, embedding the SHA-256
   of the just-written ``SHA256SUMS`` file and the ``content_fingerprint``
-  (``package_build``).
+  (``package_build``);
+- archives the now-complete ``dist`` tree (including ``SHA256SUMS`` and
+  ``manifest.json`` themselves) into a single deterministic
+  ``<version>.tar.gz`` sibling of ``dist``, so Task 11 (publication) has one
+  file to upload alongside the primary individual assets.
 """
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
+import tarfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +109,9 @@ class Manifest:
     tool_versions: Mapping[str, str]
     conflict_statistics: Mapping[str, int]
     built_at: str
+    archive_filename: str | None = None
+    archive_sha256: str | None = None
+    archive_size_bytes: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
@@ -139,6 +148,9 @@ class Manifest:
             "tool_versions": dict(sorted(self.tool_versions.items())),
             "conflict_statistics": dict(sorted(self.conflict_statistics.items())),
             "built_at": self.built_at,
+            "archive_filename": self.archive_filename,
+            "archive_sha256": self.archive_sha256,
+            "archive_size_bytes": self.archive_size_bytes,
         }
 
 
@@ -270,12 +282,26 @@ def _content_size_bytes(build: ResolvedBuild) -> int:
 
 
 def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
-    """Write SHA256SUMS then manifest.json from the already-generated dist tree.
+    """Write SHA256SUMS, manifest.json, then a deterministic archive of ``dist``.
 
     Ordering is load-bearing: artifacts already exist in ``dist``;
     ``SHA256SUMS`` is written first (covering every public file except
-    itself and ``manifest.json``), and ``manifest.json`` is written last so
+    itself and ``manifest.json``), and ``manifest.json`` is written next so
     it can embed the SHA-256 of the just-written ``SHA256SUMS`` file.
+
+    The archive is created last, from the now-complete tree (it deliberately
+    includes ``SHA256SUMS`` and ``manifest.json`` -- a consumer who only
+    downloads the archive still needs both). This creates an unavoidable
+    ordering constraint: the archive's own checksum cannot be embedded in
+    the copy of ``manifest.json`` that ships *inside* the archive (a file
+    cannot describe the checksum of the container it is already sealed
+    inside). Instead, ``manifest.json`` is written twice: once with
+    ``archive_*`` fields left ``None`` (this is the copy the archive
+    contains), and once more, after the archive exists, with those fields
+    populated (this is the copy that ships alongside the archive in
+    ``dist`` and is what Task 11's publication step reads to learn the
+    archive's name/hash for upload). Only the second, on-disk copy carries
+    the archive metadata; this is intentional, not a bug.
     """
 
     destination = Path(dist)
@@ -320,6 +346,44 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
     )
 
     manifest_path = destination / "manifest.json"
+    _write_manifest_json(manifest_path, manifest)
+
+    version = decision.version or "unreleased"
+    archive_filename = f"{version}.tar.gz"
+    archive_path = destination.parent / archive_filename
+    _create_archive(destination, archive_path)
+    archive_bytes = archive_path.read_bytes()
+    manifest = Manifest(
+        **{
+            **_manifest_kwargs(manifest),
+            "archive_filename": archive_filename,
+            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest(),
+            "archive_size_bytes": len(archive_bytes),
+        }
+    )
+    _write_manifest_json(manifest_path, manifest)
+    return manifest
+
+
+def _manifest_kwargs(manifest: Manifest) -> dict[str, object]:
+    return {
+        "schema_version": manifest.schema_version,
+        "release_version": manifest.release_version,
+        "content_fingerprint": manifest.content_fingerprint,
+        "policy_fingerprint": manifest.policy_fingerprint,
+        "sources": manifest.sources,
+        "category_counts": manifest.category_counts,
+        "total_size_bytes": manifest.total_size_bytes,
+        "artifact_sizes": manifest.artifact_sizes,
+        "checksums": manifest.checksums,
+        "sha256sums_sha256": manifest.sha256sums_sha256,
+        "tool_versions": manifest.tool_versions,
+        "conflict_statistics": manifest.conflict_statistics,
+        "built_at": manifest.built_at,
+    }
+
+
+def _write_manifest_json(manifest_path: Path, manifest: Manifest) -> None:
     manifest_path.write_text(
         json.dumps(
             manifest.to_json_dict(),
@@ -331,7 +395,61 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
         + "\n",
         encoding="utf-8",
     )
-    return manifest
+
+
+_ARCHIVE_FIXED_MTIME = 0
+_ARCHIVE_ROOT_DIR = "release"
+
+
+def _create_archive(destination: Path, archive_path: Path) -> None:
+    """Tar+gzip the complete ``dist`` tree into a byte-deterministic archive.
+
+    Determinism requires normalizing everything ``tarfile`` would otherwise
+    pull from the filesystem or the environment:
+
+    - member order is the sorted relative path (filesystem iteration order
+      is not guaranteed);
+    - ``mtime``, ``uid``, ``gid``, ``uname``, ``gname`` are forced to fixed
+      constants rather than the actual filesystem/OS values;
+    - ``mode`` is forced to a fixed constant (0o644) rather than whatever
+      the umask/filesystem produced;
+    - the gzip container's own embedded mtime and OS byte are zeroed via
+      ``mtime=0`` and a raw ``GzipFile`` (``tarfile.open(..., mode="w:gz")``
+      would otherwise stamp the wall-clock time into the gzip header,
+      which alone would make two identical archives differ byte-for-byte
+      even with every tar member normalized).
+
+    All entries are written under a fixed root directory name
+    (``release/``) rather than the temporary ``dist`` path, so extraction
+    is predictable regardless of the build's tmp/output directory name.
+    """
+
+    relative_paths = sorted(
+        path.relative_to(destination)
+        for path in destination.rglob("*")
+        if path.is_file()
+    )
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(archive_path, "wb") as raw:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=raw, mtime=_ARCHIVE_FIXED_MTIME
+        ) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                for relative in relative_paths:
+                    absolute = destination / relative
+                    info = tar.gettarinfo(
+                        absolute, arcname=f"{_ARCHIVE_ROOT_DIR}/{relative.as_posix()}"
+                    )
+                    info.mtime = _ARCHIVE_FIXED_MTIME
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    info.mode = 0o644
+                    info.pax_headers = {}
+                    with open(absolute, "rb") as fileobj:
+                        tar.addfile(info, fileobj)
 
 
 def _source_document(source: FetchedSource) -> Mapping[str, object]:

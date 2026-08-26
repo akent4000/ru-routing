@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -320,3 +321,77 @@ def test_package_build_two_runs_are_byte_identical_except_built_at(tmp_path):
     checksums_a = (dist_a / "SHA256SUMS").read_bytes()
     checksums_b = (dist_b / "SHA256SUMS").read_bytes()
     assert checksums_a == checksums_b
+
+
+# --- archive creation ---
+
+
+def test_package_build_creates_archive_next_to_dist(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    manifest = package_build(dist, _metadata())
+    archive_path = dist.parent / manifest.archive_filename
+    assert archive_path.exists()
+    assert archive_path.name.endswith(".tar.gz")
+
+
+def test_package_build_archive_contains_manifest_and_sha256sums(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    manifest = package_build(dist, _metadata())
+    archive_path = dist.parent / manifest.archive_filename
+    with tarfile.open(archive_path, "r:gz") as tar:
+        names = set(tar.getnames())
+    assert any(name.endswith("manifest.json") for name in names)
+    assert any(name.endswith("SHA256SUMS") for name in names)
+    assert any(name.endswith("xray/geoip.dat") for name in names)
+    assert any(name.endswith("raw/lite/domains/blocked.txt") for name in names)
+
+
+def test_package_build_archive_checksum_and_size_recorded_in_manifest(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    manifest = package_build(dist, _metadata())
+    archive_path = dist.parent / manifest.archive_filename
+    archive_bytes = archive_path.read_bytes()
+    assert manifest.archive_sha256 == hashlib.sha256(archive_bytes).hexdigest()
+    assert manifest.archive_size_bytes == len(archive_bytes)
+
+    on_disk_manifest = json.loads((dist / "manifest.json").read_text())
+    assert on_disk_manifest["archive_filename"] == manifest.archive_filename
+    assert on_disk_manifest["archive_sha256"] == manifest.archive_sha256
+    assert on_disk_manifest["archive_size_bytes"] == manifest.archive_size_bytes
+
+
+def test_package_build_archive_omits_its_own_checksum_from_its_bundled_manifest(
+    tmp_path,
+):
+    # The manifest.json shipped *inside* the archive cannot know the
+    # checksum of the archive that contains it, so those fields are None
+    # in that copy -- only the on-disk manifest.json (written after the
+    # archive exists) carries the populated archive_* fields.
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    manifest = package_build(dist, _metadata())
+    archive_path = dist.parent / manifest.archive_filename
+    with tarfile.open(archive_path, "r:gz") as tar:
+        member = next(m for m in tar.getmembers() if m.name.endswith("manifest.json"))
+        bundled_manifest = json.loads(tar.extractfile(member).read())
+    assert bundled_manifest["archive_sha256"] is None
+    assert bundled_manifest["archive_filename"] is None
+    assert bundled_manifest["archive_size_bytes"] is None
+
+
+def test_package_build_two_runs_produce_byte_identical_archives(tmp_path):
+    dist_a = tmp_path / "dist-a"
+    dist_b = tmp_path / "dist-b"
+    _write_dist(dist_a)
+    _write_dist(dist_b)
+    manifest_a = package_build(dist_a, _metadata())
+    manifest_b = package_build(dist_b, _metadata())
+
+    assert manifest_a.archive_filename == manifest_b.archive_filename
+    archive_a = (dist_a.parent / manifest_a.archive_filename).read_bytes()
+    archive_b = (dist_b.parent / manifest_b.archive_filename).read_bytes()
+    assert archive_a == archive_b
+    assert manifest_a.archive_sha256 == manifest_b.archive_sha256
