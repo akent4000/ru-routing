@@ -34,10 +34,13 @@ import pytest
 
 from ru_routing.package import Manifest
 from ru_routing.publish import (
+    CliBackend,
+    CloudflareCredentials,
     FakeBackend,
     PublishBackend,
     PublishError,
     PublishPlan,
+    R2Credentials,
     publish_release,
     rollback,
 )
@@ -593,3 +596,184 @@ def test_rollback_never_rebuilds_release_only_copies_and_points(tmp_path):
 
 def test_publish_backend_protocol_is_satisfied_by_fake_backend():
     assert isinstance(FakeBackend(), PublishBackend)
+
+
+# --- Failure/cleanup: create_draft_release fails before any R2 write -----
+
+
+def test_create_release_failure_raises_and_attempts_no_r2_writes(tmp_path):
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.26.0800-dddddddd")
+    backend.fail_create_release = True
+
+    with pytest.raises(PublishError):
+        publish_release(plan, backend)
+
+    assert backend.put_log == []
+    assert backend.created_release_id is None
+
+
+def test_create_release_failure_cleanup_does_not_crash_on_missing_release_id(
+    tmp_path,
+):
+    # release_id is None when create_draft_release itself is the failure --
+    # _cleanup_failed_publication must skip delete_release entirely rather
+    # than trying to delete a release that was never created.
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.26.0801-eeeeeeee")
+    backend.fail_create_release = True
+
+    with pytest.raises(PublishError) as excinfo:
+        publish_release(plan, backend)
+
+    assert backend.deleted_release_id is None
+    # The release tree delete_prefix cleanup step still runs (no-op, since
+    # nothing was ever uploaded) and must not itself raise or fail.
+    assert backend.deleted_prefixes == ["releases/2026.08.26.0801-eeeeeeee/"]
+    assert "cleaned up" in str(excinfo.value) or "cleanup" in str(excinfo.value).lower()
+
+
+# --- Credential repr/str redaction ----------------------------------------
+
+
+def test_r2_credentials_repr_redacts_secrets():
+    creds = R2Credentials(
+        account_id="acct-123",
+        access_key_id="AKIA-SUPER-SECRET-ID",
+        secret_access_key="SUPER-SECRET-KEY-VALUE",
+        bucket="routing-bucket",
+        endpoint_url="https://example.r2.cloudflarestorage.com",
+    )
+
+    text = repr(creds)
+
+    assert "AKIA-SUPER-SECRET-ID" not in text
+    assert "SUPER-SECRET-KEY-VALUE" not in text
+    assert "routing-bucket" in text
+    assert str(creds) == text
+
+
+def test_cloudflare_credentials_repr_redacts_secrets():
+    creds = CloudflareCredentials(
+        zone_id="zone-123", api_token="CF-SUPER-SECRET-TOKEN"
+    )
+
+    text = repr(creds)
+
+    assert "CF-SUPER-SECRET-TOKEN" not in text
+    assert "zone-123" in text
+    assert str(creds) == text
+
+
+# --- CliBackend.delete_prefix pagination ----------------------------------
+
+
+class _FakeAwsProcess:
+    def __init__(self, returncode: int, stdout: bytes, stderr: bytes = b""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _make_cli_backend(aws_subprocess_runner, tmp_path):
+    return CliBackend(
+        r2=R2Credentials(
+            account_id="acct",
+            access_key_id="key",
+            secret_access_key="secret",
+            bucket="bucket",
+            endpoint_url="https://example.r2.cloudflarestorage.com",
+        ),
+        cloudflare=CloudflareCredentials(zone_id="zone", api_token="token"),
+        repo="owner/repo",
+        workdir=tmp_path,
+        aws_subprocess_runner=aws_subprocess_runner,
+    )
+
+
+def test_cli_backend_delete_prefix_paginates_across_multiple_pages(tmp_path):
+    # Two pages: first truncated with a continuation token, second final.
+    page_one = json.dumps(
+        {
+            "Contents": [{"Key": f"releases/v1/file-{i}.bin"} for i in range(3)],
+            "IsTruncated": True,
+            "NextContinuationToken": "token-abc",
+        }
+    ).encode("utf-8")
+    page_two = json.dumps(
+        {
+            "Contents": [{"Key": f"releases/v1/file-{i}.bin"} for i in range(3, 5)],
+            "IsTruncated": False,
+        }
+    ).encode("utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if "list-objects-v2" in command:
+            if "--continuation-token" in command:
+                assert command[command.index("--continuation-token") + 1] == (
+                    "token-abc"
+                )
+                return _FakeAwsProcess(0, page_two)
+            return _FakeAwsProcess(0, page_one)
+        assert "delete-object" in command
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+    backend.delete_prefix("releases/v1/")
+
+    list_calls = [c for c in calls if "list-objects-v2" in c]
+    delete_calls = [c for c in calls if "delete-object" in c]
+
+    # Exactly two list-objects-v2 calls (one per page), and the pagination
+    # loop collected every key across both pages before deleting anything.
+    assert len(list_calls) == 2
+    assert len(delete_calls) == 5
+    deleted_keys = {c[c.index("--key") + 1] for c in delete_calls}
+    assert deleted_keys == {f"releases/v1/file-{i}.bin" for i in range(5)}
+
+    # Every list-objects-v2 call pins --output json.
+    for call in list_calls:
+        assert "--output" in call
+        assert call[call.index("--output") + 1] == "json"
+
+
+def test_cli_backend_delete_prefix_single_page_no_pagination(tmp_path):
+    page = json.dumps(
+        {
+            "Contents": [{"Key": "releases/v1/only.bin"}],
+            "IsTruncated": False,
+        }
+    ).encode("utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if "list-objects-v2" in command:
+            return _FakeAwsProcess(0, page)
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+    backend.delete_prefix("releases/v1/")
+
+    list_calls = [c for c in calls if "list-objects-v2" in c]
+    assert len(list_calls) == 1
+    assert "--continuation-token" not in list_calls[0]
+
+
+def test_cli_backend_delete_prefix_empty_listing_deletes_nothing(tmp_path):
+    page = json.dumps({"IsTruncated": False}).encode("utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return _FakeAwsProcess(0, page)
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+    backend.delete_prefix("releases/v1/")
+
+    assert all("delete-object" not in c for c in calls)

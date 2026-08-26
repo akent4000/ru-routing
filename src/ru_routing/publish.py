@@ -521,6 +521,7 @@ class FakeBackend:
         self.fail_purge: bool = False
         self.fail_delete_prefix: bool = False
         self.fail_finalize: bool = False
+        self.fail_create_release: bool = False
         self.secret_marker: str | None = None
 
         self._op_count = 0
@@ -566,6 +567,10 @@ class FakeBackend:
 
     def create_draft_release(self, version: str, archive_path: Path) -> str:
         self.draft_created_index = self._tick()
+        if self.fail_create_release:
+            raise RuntimeError(
+                f"simulated create_draft_release failure for {version}"
+            )
         self._release_counter += 1
         release_id = f"draft-{self._release_counter}-{version}"
         self.created_release_id = release_id
@@ -609,6 +614,16 @@ class R2Credentials:
     bucket: str
     endpoint_url: str
 
+    def __repr__(self) -> str:  # pragma: no cover -- trivial formatting
+        return (
+            f"R2Credentials(bucket={self.bucket!r}, "
+            f"endpoint_url={self.endpoint_url!r}, "
+            "account_id=<redacted>, access_key_id=<redacted>, "
+            "secret_access_key=<redacted>)"
+        )
+
+    __str__ = __repr__
+
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "R2Credentials":
         try:
@@ -633,6 +648,14 @@ class CloudflareCredentials:
 
     zone_id: str
     api_token: str
+
+    def __repr__(self) -> str:  # pragma: no cover -- trivial formatting
+        return (
+            f"CloudflareCredentials(zone_id={self.zone_id!r}, "
+            "api_token=<redacted>)"
+        )
+
+    __str__ = __repr__
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "CloudflareCredentials":
@@ -682,6 +705,7 @@ class CliBackend:
         aws: str = "aws",
         workdir: Path | None = None,
         http_client: httpx.Client | None = None,
+        aws_subprocess_runner=subprocess.run,
     ) -> None:
         self._r2 = r2
         self._cloudflare = cloudflare
@@ -691,6 +715,10 @@ class CliBackend:
         self._aws = aws
         self._workdir = Path(workdir) if workdir is not None else Path.cwd()
         self._http_client = http_client
+        # Injectable only so tests can exercise _run_aws's callers (notably
+        # delete_prefix's list-objects-v2 pagination loop) without shelling
+        # out to a real `aws` binary; production code never overrides this.
+        self._aws_subprocess_runner = aws_subprocess_runner
 
     def _aws_env(self) -> dict[str, str]:
         return {
@@ -706,7 +734,7 @@ class CliBackend:
         # This still follows the same argv-only, shell=False discipline as
         # ToolRunner -- an explicit argument list, never a shell string.
         command = [self._aws, "s3api", *argv, "--endpoint-url", self._r2.endpoint_url]
-        completed = subprocess.run(
+        completed = self._aws_subprocess_runner(
             command,
             cwd=self._workdir,
             env=self._aws_env(),
@@ -771,11 +799,34 @@ class CliBackend:
         self._run_aws(["delete-object", "--bucket", self._r2.bucket, "--key", key])
 
     def delete_prefix(self, prefix: str) -> None:
-        listing = self._run_aws(
-            ["list-objects-v2", "--bucket", self._r2.bucket, "--prefix", prefix]
-        )
-        payload = json.loads(listing) if listing else {}
-        keys = [item["Key"] for item in payload.get("Contents", [])]
+        # list-objects-v2 caps Contents at 1000 keys per call and signals
+        # truncation via IsTruncated/NextContinuationToken; a release tree
+        # exceeding 1000 objects would otherwise leave the remainder as a
+        # silently orphaned partial tree in exactly this cleanup path. We
+        # collect every key across every page before deleting anything, so
+        # the delete loop below always sees the complete set.
+        keys: list[str] = []
+        continuation_token: str | None = None
+        while True:
+            argv = [
+                "list-objects-v2",
+                "--bucket",
+                self._r2.bucket,
+                "--prefix",
+                prefix,
+                "--output",
+                "json",
+            ]
+            if continuation_token is not None:
+                argv.extend(["--continuation-token", continuation_token])
+            listing = self._run_aws(argv)
+            payload = json.loads(listing) if listing else {}
+            keys.extend(item["Key"] for item in payload.get("Contents", []))
+            if not payload.get("IsTruncated"):
+                break
+            continuation_token = payload.get("NextContinuationToken")
+            if continuation_token is None:
+                break
         for object_key in keys:
             self.delete_object(object_key)
 
