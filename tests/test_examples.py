@@ -10,6 +10,7 @@ copies and substitutes them into the dist/examples output contract layout.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tempfile
@@ -436,8 +437,15 @@ class _FixtureGeodataReader:
     def read(self, input_type: str, category: str, artifact: Path):
         # Values are unique per (input_type, category) so unrelated
         # canonical categories never collide during resolve_datasets'
-        # cross-category precedence resolution.
-        index = abs(hash((input_type, category))) % 250 + 1
+        # cross-category precedence resolution. Derived from a stable
+        # SHA-256 digest rather than Python's built-in ``hash()`` --
+        # ``hash()`` on str/tuple is salted per-process by
+        # PYTHONHASHSEED (random by default), which can make unrelated
+        # (input_type, category) pairs collide on the same synthetic
+        # index under some seeds, causing spurious ResolutionErrors
+        # unrelated to the code under test.
+        digest = hashlib.sha256(f"{input_type}:{category}".encode("utf-8")).digest()
+        index = int.from_bytes(digest[:4], "big") % 250 + 1
         if input_type == "geoip_dat":
             return (GeodataRule(kind=RuleKind.CIDR, value=f"203.0.{index}.0/24"),)
         return (
@@ -475,8 +483,13 @@ def _cidr_capable_canonical_categories() -> frozenset[str]:
                         "ipset" in location for location in locations
                     )
                     # Unique per (source, category) for the same collision-
-                    # avoidance reason as _FixtureGeodataReader above.
-                    index = abs(hash((source.name, category))) % 250 + 1
+                    # avoidance reason as _FixtureGeodataReader above, and
+                    # derived from a stable SHA-256 digest rather than
+                    # Python's salted ``hash()`` for the same reason.
+                    digest = hashlib.sha256(
+                        f"{source.name}:{category}".encode("utf-8")
+                    ).digest()
+                    index = int.from_bytes(digest[:4], "big") % 250 + 1
                     content = (
                         f"203.0.{index}.0/24\n"
                         if is_ipset_feed
