@@ -377,6 +377,170 @@ def test_build_failure_in_a_late_stage_leaves_a_prior_dist_unchanged(
     assert dist.is_dir()
     assert (dist / "manifest.json").read_text(encoding="utf-8") == prior_manifest
     assert (dist / "SHA256SUMS").read_text(encoding="utf-8") == prior_checksums
+
+
+def _force_publish_swap_to_fail(monkeypatch, cli_module):
+    """Make ``_publish_dist``'s final ``os.replace(stage, destination)`` raise.
+
+    Simulates a disk-full/cross-device/permission failure mid-swap, after
+    every build stage (``_run_build_stages``) has already succeeded and
+    written a complete tree to the outer staging directory. Wraps
+    ``_publish_dist`` itself (rather than patching ``os.replace`` globally
+    for the whole build) so the flakiness only arms once every stage has
+    finished -- other stages (``generate``/``render``) do their own internal
+    staged ``os.replace`` swaps that must keep succeeding normally.
+
+    Only the swap-in call (``os.replace(stage, destination)``) is made to
+    fail, identified by its exact (src, dst) pair rather than call order --
+    on a first build that is the *only* ``os.replace`` call
+    ``_publish_dist`` makes, while on a subsequent build (over a pre-existing
+    ``destination``) it is the *second* call, after the ``destination ->
+    backup`` swap-out. Either way, this leaves the earlier swap-out call (if
+    any) and the recovery call (``os.replace(backup, destination)``) alone,
+    so ``_publish_dist``'s own recovery branch still runs exactly as it does
+    in production.
+    """
+
+    real_publish_dist = cli_module._publish_dist
+
+    def _flaky_publish_dist(stage, destination):
+        real_os_replace = cli_module.os.replace
+
+        def _flaky_replace(src, dst):
+            if src == stage and dst == destination:
+                raise OSError("forced os.replace failure for publish-swap test")
+            return real_os_replace(src, dst)
+
+        with monkeypatch.context() as inner:
+            inner.setattr(cli_module.os, "replace", _flaky_replace)
+            real_publish_dist(stage, destination)
+
+    monkeypatch.setattr(cli_module, "_publish_dist", _flaky_publish_dist)
+
+
+def test_build_failure_in_publish_swap_leaves_no_orphaned_staging_dir_first(
+    monkeypatch, tmp_path
+):
+    """Regression test: a failure inside ``_publish_dist`` itself (not just
+    inside ``_run_build_stages``) must still clean up the outer staging
+    directory ``_run_build`` created.
+
+    Before this fix, ``_run_build``'s ``try/except`` only wrapped the
+    ``_run_build_stages`` call, not the subsequent ``_publish_dist(stage,
+    destination)`` call, so a failure in the atomic-swap step itself (e.g.
+    the ``os.replace(stage, destination)`` swap-in failing) left the
+    ``.{name}.tmp-*`` staging directory orphaned on disk forever, even
+    though ``_publish_dist``'s own internal recovery logic correctly
+    restored ``destination`` to its prior valid state.
+
+    ``_publish_dist``'s own ``OSError`` is not currently caught/translated
+    anywhere in the ``build``/``check`` CLI handlers (pre-existing,
+    unrelated to this fix), so this drives ``_run_build`` directly rather
+    than through ``main`` and asserts the ``OSError`` propagates.
+    """
+
+    import ru_routing.cli as cli_module
+
+    parser = cli_module.build_parser()
+    dist = tmp_path / "dist"
+    arguments = parser.parse_args(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+
+    _force_publish_swap_to_fail(monkeypatch, cli_module)
+
+    with pytest.raises(OSError, match="forced os.replace failure"):
+        cli_module._run_build(arguments, dist)
+
+    # destination is correctly absent, matching its prior (never-existed) state.
+    assert not dist.exists()
+    # No orphaned `.dist.tmp-*` staging directory (or `.dist.previous` backup)
+    # left behind in dist's parent. (A `<version>.tar.gz` sibling is expected
+    # here -- package_build writes it as a deliberate sibling of `dist` during
+    # the already-succeeded `_run_build_stages` step, before the publish swap
+    # this test is exercising even runs; see package.py's docstring.)
+    leftover_names = {p.name for p in tmp_path.iterdir()}
+    assert not any(
+        name.startswith(f".{dist.name}.tmp-") or name == f".{dist.name}.previous"
+        for name in leftover_names
+    ), leftover_names
+
+
+def test_build_failure_in_publish_swap_leaves_no_orphaned_staging_dir_next(
+    monkeypatch, tmp_path
+):
+    """Same as above, but for a *subsequent* build over a previously
+    complete ``--dist``: the publish-swap failure must both restore
+    ``destination`` to its prior complete state (``_publish_dist``'s own
+    existing recovery guarantee) *and* leave no orphaned staging directory
+    behind (the fix under test).
+    """
+
+    import ru_routing.cli as cli_module
+
+    dist = tmp_path / "dist"
+
+    # First, a real successful build establishes a prior complete state.
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+            "--built-at",
+            "2026-01-01T00:00:00+00:00",
+        ]
+    )
+    assert exit_code == 0
+    prior_manifest = (dist / "manifest.json").read_text(encoding="utf-8")
+    prior_checksums = (dist / "SHA256SUMS").read_text(encoding="utf-8")
+
+    parser = cli_module.build_parser()
+    arguments = parser.parse_args(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+            "--built-at",
+            "2026-01-02T00:00:00+00:00",
+        ]
+    )
+
+    _force_publish_swap_to_fail(monkeypatch, cli_module)
+
+    with pytest.raises(OSError, match="forced os.replace failure"):
+        cli_module._run_build(arguments, dist)
+
+    # destination is restored to its prior complete state.
+    assert dist.is_dir()
+    assert (dist / "manifest.json").read_text(encoding="utf-8") == prior_manifest
+    assert (dist / "SHA256SUMS").read_text(encoding="utf-8") == prior_checksums
+    # No orphaned staging directory or leftover ".dist.previous" backup dir
+    # left behind alongside the restored dist. (`<version>.tar.gz` siblings
+    # are expected -- see the comment in the first-build variant above.)
+    leftover_names = {p.name for p in tmp_path.iterdir()}
+    assert not any(
+        name.startswith(f".{dist.name}.tmp-") or name == f".{dist.name}.previous"
+        for name in leftover_names
+    ), leftover_names
     # No stray outer staging/backup siblings left behind (the first
     # successful build's release archive, a sibling of dist by design --
     # see package_build's docstring -- is expected and unrelated).

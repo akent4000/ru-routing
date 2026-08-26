@@ -767,10 +767,10 @@ def _run_build(arguments: argparse.Namespace, dist: Path) -> None:
     )
     try:
         _run_build_stages(arguments, stage)
+        _publish_dist(stage, destination)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
         raise
-    _publish_dist(stage, destination)
 
 
 def _publish_dist(stage: Path, destination: Path) -> None:
