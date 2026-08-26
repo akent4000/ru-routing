@@ -12,6 +12,13 @@ services:
       # Linux refuses to rename() a bind-mount point. Mounting ./output and
       # passing --dist /work/output/dist keeps the atomic-swap target one
       # level inside the mount, where renames are unrestricted.
+      #
+      # The builder image runs as a non-root user (uid/gid 10001, see
+      # Dockerfile). A bind mount takes its ownership from the host
+      # directory, not the image, so if ./output isn't writable by uid
+      # 10001 the build will fail with PermissionError. Locally, run
+      # `chmod 777 ./output` (or `chown 10001:10001 ./output`) once before
+      # using this compose file.
       - ./output:/work/output
     # Example: docker compose run --rm builder build --fixtures
     # tests/fixtures/upstreams/registry --dist /work/output/dist

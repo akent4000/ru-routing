@@ -134,5 +134,29 @@ RUN pip install --no-cache-dir /work
 # path resolve to itself.
 ENV XRAY_LOCATION_ASSET=/
 
+# Run as a dedicated non-root user: this image runs in CI against untrusted
+# upstream data (fetched domain/CIDR lists), and the five native tools
+# above (two built from source, three release binaries) have no business
+# running as root. GOCACHE=/tmp/gocache (set above) and the container's
+# other writable paths (tempfile's default /tmp, and whatever --dist's
+# parent directory the caller bind-mounts, e.g. docker-compose.yml's
+# /work/output) all need to stay writable by this user -- /tmp is
+# world-writable by default, and /work/output is chown'd below to a fixed
+# uid/gid (10001) at image-build time. NOTE: when ./output is bind-mounted
+# (docker-compose.yml, local dev), the *host* directory's ownership wins at
+# runtime over this in-image chown, so a host directory owned by a
+# different uid (the common case) will make writes fail with
+# PermissionError until the host directory is made writable by uid 10001,
+# e.g. `chmod 777 ./output` or `chown 10001:10001 ./output`. GitHub Actions
+# runners typically don't hit this: ephemeral runners either run the
+# container without a host bind mount or run as a uid that already owns
+# the checkout.
+RUN groupadd --gid 10001 appgroup \
+    && useradd --uid 10001 --gid appgroup --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /work/output /tmp/gocache \
+    && chown -R appuser:appgroup /work/output /tmp/gocache
+
+USER appuser
+
 ENTRYPOINT ["ru-routing"]
 CMD ["--help"]
