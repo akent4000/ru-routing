@@ -194,6 +194,22 @@ def test_publish_release_order_is_releases_then_latest_then_manifest(tmp_path):
     assert releases_index < latest_index < manifest_index
 
 
+def test_publish_release_writes_sha256sums_before_manifest(tmp_path):
+    # manifest.json must be the true last write of the whole sequence: with
+    # SHA256SUMS written first, manifest.json's successful PUT is the
+    # atomic pointer-flip moment with nothing else left that can fail.
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.26.0009-44444445")
+
+    publish_release(plan, backend)
+
+    keys = [entry[1] for entry in backend.put_log]
+    sums_index = keys.index("SHA256SUMS")
+    manifest_index = keys.index("manifest.json")
+    assert sums_index < manifest_index
+    assert keys[-1] == "manifest.json"
+
+
 def test_publish_release_purges_cache_for_latest_and_manifest(tmp_path):
     backend = FakeBackend()
     plan = _plan(tmp_path, "2026.08.26.0004-eeeeeeee")
@@ -374,6 +390,39 @@ def test_manifest_write_failure_triggers_cleanup_and_latest_restoration(tmp_path
     assert manifest_payload["latest_version"] == "2026.08.25.0002-00000002"
 
 
+def test_sha256sums_failure_leaves_manifest_pointer_at_prior_version(tmp_path):
+    # Regression test for the exact interleaving a spec-compliance review
+    # found unsafe under the old (pre-fix) write order, where manifest.json
+    # was uploaded BEFORE SHA256SUMS: if SHA256SUMS's PUT then failed, the
+    # exception unwound into cleanup, which deleted the release tree
+    # manifest.json now pointed at and restored /latest/*, but never
+    # touched manifest.json itself -- leaving the root pointer naming a
+    # version whose tree had just been deleted. With SHA256SUMS now written
+    # first and manifest.json strictly last, a SHA256SUMS failure happens
+    # entirely before the pointer write is even attempted, so cleanup must
+    # leave the pointer at the PRIOR version, exactly like every other
+    # failure before the manifest write.
+    backend = FakeBackend()
+    prior = _seed_prior_release(backend, "2026.08.25.0004-00000004")
+    plan = _plan(tmp_path, "2026.08.26.0410-99999998", previous_manifest=prior)
+    backend.fail_put_key = "SHA256SUMS"
+
+    with pytest.raises(PublishError):
+        publish_release(plan, backend)
+
+    # The root pointer is exactly what it was before this publication
+    # attempt began -- manifest.json's PUT was never reached by this failed
+    # run, since SHA256SUMS is written strictly before it.
+    manifest_payload = json.loads(backend.get_object("manifest.json"))
+    assert manifest_payload["latest_version"] == "2026.08.25.0004-00000004"
+
+    assert backend.deleted_release_id == backend.created_release_id
+    assert not backend.finalized_release_id
+    assert backend.deleted_prefixes == ["releases/2026.08.26.0410-99999998/"]
+    assert backend.get_object("latest/xray/geoip.dat") == b"prior-geoip"
+    assert backend.get_object("latest/sing-box/lite/example.json") == b"prior-singbox"
+
+
 # --- Failure/cleanup: cache purge ---------------------------------------
 
 
@@ -393,6 +442,44 @@ def test_purge_failure_does_not_roll_back_manifest_pointer(tmp_path):
     assert manifest_payload["latest_version"] == "2026.08.26.0500-aaaaaaab"
     assert backend.deleted_release_id is None
     assert backend.finalized_release_id == backend.created_release_id
+
+
+# --- Failure: GitHub Release finalization after R2 already published ----
+
+
+def test_finalize_failure_after_r2_publication_leaves_r2_state_intact(tmp_path):
+    # If R2 publication (steps 1-3) has already succeeded when finalization
+    # fails, R2 is already live and correctly serving the new version.
+    # publish_release must raise PublishError but must NOT roll back R2
+    # state, and must NOT delete the draft release -- deleting it would
+    # orphan the already-correct R2 state with no discoverable GitHub
+    # Release at all. See the design doc's "Publication and CDN" section:
+    # it only prescribes deleting the draft when R2 publication itself
+    # fails (before the pointer flip); it is silent on a later finalization
+    # failure, so this test documents the chosen interpretation.
+    backend = FakeBackend()
+    prior = _seed_prior_release(backend, "2026.08.25.0005-00000005")
+    plan = _plan(tmp_path, "2026.08.26.0420-99999997", previous_manifest=prior)
+    backend.fail_finalize = True
+
+    with pytest.raises(PublishError, match="finalization failed"):
+        publish_release(plan, backend)
+
+    # R2 state (manifest pointer, /latest/*, /releases/<version>/) is left
+    # exactly as the successful publication produced it -- not rolled back.
+    manifest_payload = json.loads(backend.get_object("manifest.json"))
+    assert manifest_payload["latest_version"] == "2026.08.26.0420-99999997"
+    assert backend.get_object("latest/xray/geoip.dat") == _content_for(
+        "2026.08.26.0420-99999997", "xray/geoip.dat"
+    )
+    for relative in plan.manifest.checksums:
+        key = f"releases/2026.08.26.0420-99999997/{relative}"
+        assert key in backend.objects
+
+    # The draft release is left untouched -- not deleted, not finalized.
+    assert backend.created_release_id is not None
+    assert backend.deleted_release_id is None
+    assert backend.finalized_release_id is None
 
 
 # --- Cleanup failure reporting -------------------------------------------

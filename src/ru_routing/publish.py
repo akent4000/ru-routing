@@ -10,8 +10,15 @@ and a sibling release archive; this module takes that output (wrapped in a
    tree (never overwritten once published);
 2. upload the individual objects under ``/latest/*`` -- copies of the
    just-verified immutable tree's content;
-3. as the final step, write ``/manifest.json`` with the new
-   ``latest_version`` -- the single atomic pointer flip;
+3. write the root ``SHA256SUMS`` and then, as the final step, write
+   ``/manifest.json`` with the new ``latest_version`` -- the single atomic
+   pointer flip. ``manifest.json`` is written strictly last (see
+   ``_write_manifest``) so that a single-object R2 PUT's per-object
+   atomicity (an S3-compatible PUT either fully lands or fully fails; it
+   never leaves partial/ambiguous content visible to a reader) is what
+   makes this pointer flip safe: nothing else in the publication sequence
+   can fail after ``manifest.json``'s PUT is attempted, so an exception
+   from that PUT itself can only mean the pointer never moved;
 4. purge the Cloudflare cache for ``/latest/*`` and ``/manifest.json``.
 
 A draft GitHub Release is created and its assets uploaded *before* R2
@@ -183,6 +190,17 @@ def publish_release(plan: PublishPlan, backend: PublishBackend) -> str:
     try:
         backend.finalize_release(release_id)
     except Exception as error:
+        # R2 has already been fully published: the manifest pointer flip
+        # (step 3) succeeded and consumers are correctly served the new
+        # version. The design doc's cleanup section only prescribes
+        # deleting the draft release when R2 publication itself fails
+        # (before the pointer flip); it is silent on this later case. We
+        # deliberately do NOT delete or otherwise touch the draft release
+        # here: deleting it would not fix anything (R2 is already live and
+        # correct) and would instead orphan that correct R2 state with no
+        # discoverable GitHub Release at all. The draft is left in place
+        # for a human to retry finalization (`gh release edit --draft=false`)
+        # or investigate.
         raise PublishError(
             f"R2 publication succeeded but GitHub Release finalization failed "
             f"for version {version}"
@@ -323,19 +341,35 @@ def _copy_prefix_to_latest(
 
 
 def _write_manifest(backend: PublishBackend, manifest: Manifest) -> None:
+    """Write the root ``SHA256SUMS`` and then ``manifest.json`` pointer.
+
+    ``SHA256SUMS`` is written first and ``manifest.json`` strictly last, per
+    the design doc's "the package stage instead produces the artifacts and
+    ``SHA256SUMS`` first, then writes ``manifest.json`` last" and "as the
+    final step, write ``/manifest.json``". This ordering matters for
+    failure safety: ``publish_release``'s cleanup path treats *any*
+    exception from this function as "the pointer was not yet flipped, safe
+    to fully delete the new release tree and restore ``/latest/*``". That
+    is only true if ``manifest.json`` -- the actual pointer -- is the very
+    last write, with nothing else in this function able to fail afterward.
+    Writing ``manifest.json`` first (the previous, incorrect ordering)
+    could let a subsequent ``SHA256SUMS`` failure unwind into cleanup while
+    the root pointer already named the new (about to be deleted) version.
+    """
+
+    sums_body = _sha256sums_body(manifest)
+    backend.put_object(
+        "SHA256SUMS",
+        sums_body,
+        content_type="text/plain",
+        cache_control=_REVALIDATE_CACHE_CONTROL,
+    )
     payload = {**manifest.to_json_dict(), "latest_version": manifest.release_version}
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     backend.put_object(
         "manifest.json",
         body,
         content_type="application/json",
-        cache_control=_REVALIDATE_CACHE_CONTROL,
-    )
-    sums_body = _sha256sums_body(manifest)
-    backend.put_object(
-        "SHA256SUMS",
-        sums_body,
-        content_type="text/plain",
         cache_control=_REVALIDATE_CACHE_CONTROL,
     )
 
@@ -486,6 +520,7 @@ class FakeBackend:
         self.corrupt_readback_key: str | None = None
         self.fail_purge: bool = False
         self.fail_delete_prefix: bool = False
+        self.fail_finalize: bool = False
         self.secret_marker: str | None = None
 
         self._op_count = 0
@@ -542,6 +577,10 @@ class FakeBackend:
 
     def finalize_release(self, release_id: str) -> None:
         self.finalize_index = self._tick()
+        if self.fail_finalize:
+            raise RuntimeError(
+                f"simulated finalize_release failure for {release_id}"
+            )
         self.finalized_release_id = release_id
 
     def delete_release(self, release_id: str) -> None:
@@ -611,11 +650,16 @@ class CloudflareCredentials:
 class CliBackend:
     """Production ``PublishBackend`` wrapping ``gh``, ``aws s3api``, and Cloudflare.
 
-    All subprocess invocations go through ``ToolRunner`` (the same
-    argv-only, no-shell boundary ``generate.py``/``validate.py`` use for
-    native tools) -- never a shell command string, so credentials passed
-    as CLI arguments cannot leak through shell history/expansion, and every
-    argument is an explicit, inspectable list element.
+    The ``gh``-wrapping methods (``create_draft_release``,
+    ``upload_release_asset``, ``finalize_release``, ``delete_release``) go
+    through ``ToolRunner`` (the same argv-only, no-shell boundary
+    ``generate.py``/``validate.py`` use for native tools). ``_run_aws`` (used
+    by the R2 methods) instead calls ``subprocess.run`` directly, because it
+    needs to pass R2 credentials via ``env=`` -- ``ToolRunner.run`` has no
+    ``env`` parameter -- but it still follows the same argv-only,
+    ``shell=False`` discipline: an explicit list of arguments, never a shell
+    command string, so credentials cannot leak through shell history or
+    shell expansion either way.
 
     Credentials (``r2`` / ``cloudflare``) are held only as constructor
     fields, passed to subprocesses via ``env`` (for the AWS CLI's
@@ -656,6 +700,11 @@ class CliBackend:
         }
 
     def _run_aws(self, argv: Sequence[str]) -> str:
+        # Deliberately bypasses ToolRunner: ToolRunner.run(argv, cwd) has no
+        # env= parameter, and the AWS CLI needs AWS_ACCESS_KEY_ID/
+        # AWS_SECRET_ACCESS_KEY passed via the environment (see _aws_env).
+        # This still follows the same argv-only, shell=False discipline as
+        # ToolRunner -- an explicit argument list, never a shell string.
         command = [self._aws, "s3api", *argv, "--endpoint-url", self._r2.endpoint_url]
         completed = subprocess.run(
             command,
