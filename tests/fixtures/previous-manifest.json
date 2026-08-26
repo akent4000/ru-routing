@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "release_version": "2026.08.20.0900-aaaaaaaa",
+  "content_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "policy_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "sources": [
+    {
+      "name": "hydraponique/roscomvpn-geoip",
+      "resolved_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "license": {"spdx": "GPL-3.0-only", "redistribution_reviewed": true},
+      "observed_freshness_lag_hours": null
+    }
+  ],
+  "category_counts": {"lite:blocked": 3, "lite:ru-ip": 1, "server:blocked": 3, "server:ru-ip": 1},
+  "total_size_bytes": 914,
+  "artifact_sizes": {"xray/geoip.dat": 11},
+  "checksums": {"xray/geoip.dat": "8b1a9953c4611296a827abf8c47804d7e837f279f6f7756a0e9b47eeb6cb583"},
+  "sha256sums_sha256": "0000000000000000000000000000000000000000000000000000000000000",
+  "tool_versions": {"xray": "1.0.0"},
+  "conflict_statistics": {"overlaps_before": 0, "overlaps_after": 0, "resolved": 0},
+  "built_at": "2026-08-20T09:00:00+00:00"
+}
