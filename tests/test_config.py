@@ -111,6 +111,12 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         }
     )
     assert source_removal.reset_size is True
+    assert source_removal.expected_previous_policy_fingerprint == (
+        "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
+    )
+    assert source_removal.expected_current_policy_fingerprint == (
+        "df52701b7511491a3a17b7c0d4c08ebdd29fe244ec50e3b27b680c1b59cad3ba"
+    )
 
     with pytest.raises(FrozenInstanceError):
         aireps.url = "https://invalid.example"  # type: ignore[misc]

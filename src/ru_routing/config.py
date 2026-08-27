@@ -197,8 +197,10 @@ class CategoryPolicy:
 
 @dataclass(frozen=True)
 class SourceRemovalMigration:
-    """Reviewed one-time anomaly baseline resets for an exact source removal."""
+    """Reviewed anomaly resets for one exact policy and source transition."""
 
+    expected_previous_policy_fingerprint: str
+    expected_current_policy_fingerprint: str
     removed_source_ids: frozenset[str]
     reset_category_keys: frozenset[str]
     reset_size: bool
@@ -506,6 +508,15 @@ def _unique_string_set(value: Any, context: str) -> frozenset[str]:
     return frozenset(strings)
 
 
+def _sha256_fingerprint(value: Any, context: str) -> str:
+    fingerprint = _string(value, context)
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise ConfigError(f"{context} must be a lowercase SHA-256 fingerprint")
+    return fingerprint
+
+
 def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]:
     if not isinstance(value, list):
         raise ConfigError("source_removal_migrations must be a list")
@@ -517,8 +528,22 @@ def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]
             raise ConfigError(f"{context} must be a mapping")
         _require_fields(
             raw_migration,
-            {"removed_source_ids", "reset_category_keys", "reset_size"},
+            {
+                "expected_previous_policy_fingerprint",
+                "expected_current_policy_fingerprint",
+                "removed_source_ids",
+                "reset_category_keys",
+                "reset_size",
+            },
             context,
+        )
+        expected_previous_policy_fingerprint = _sha256_fingerprint(
+            raw_migration["expected_previous_policy_fingerprint"],
+            f"{context}.expected_previous_policy_fingerprint",
+        )
+        expected_current_policy_fingerprint = _sha256_fingerprint(
+            raw_migration["expected_current_policy_fingerprint"],
+            f"{context}.expected_current_policy_fingerprint",
         )
         removed_source_ids = _unique_string_set(
             raw_migration["removed_source_ids"], f"{context}.removed_source_ids"
@@ -548,6 +573,12 @@ def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]
             raise ConfigError(f"{context}.reset_size must be a boolean")
         migrations.append(
             SourceRemovalMigration(
+                expected_previous_policy_fingerprint=(
+                    expected_previous_policy_fingerprint
+                ),
+                expected_current_policy_fingerprint=(
+                    expected_current_policy_fingerprint
+                ),
                 removed_source_ids=removed_source_ids,
                 reset_category_keys=reset_category_keys,
                 reset_size=reset_size,

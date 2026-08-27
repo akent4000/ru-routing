@@ -290,16 +290,6 @@ def _version_string(content_digest: str, built_at: str) -> str:
     return f"{timestamp:%Y.%m.%d.%H%M}-{content_digest[:8]}"
 
 
-def _is_sha256_digest(value: object) -> bool:
-    if not isinstance(value, str) or len(value) != 64:
-        return False
-    try:
-        int(value, 16)
-    except ValueError:
-        return False
-    return True
-
-
 def _previous_source_names(previous: Mapping[str, object]) -> frozenset[str] | None:
     raw_sources = previous.get("sources")
     if not isinstance(raw_sources, list) or not raw_sources:
@@ -338,8 +328,6 @@ def _approved_source_removal(
     previous_policy: object,
     current_policy: str,
 ) -> SourceRemovalMigration | None:
-    if not _is_sha256_digest(previous_policy) or previous_policy == current_policy:
-        return None
     previous_names = _previous_source_names(previous)
     current_names = _current_source_names(current_sources)
     if previous_names is None or current_names is None:
@@ -350,7 +338,9 @@ def _approved_source_removal(
     matches = [
         migration
         for migration in migrations
-        if migration.removed_source_ids == removed_names
+        if migration.expected_previous_policy_fingerprint == previous_policy
+        and migration.expected_current_policy_fingerprint == current_policy
+        and migration.removed_source_ids == removed_names
     ]
     if len(matches) != 1:
         return None

@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from ru_routing.config import LicenseMetadata, SourceRemovalMigration, ThresholdPolicy
+from ru_routing.config import LicenseMetadata, ThresholdPolicy, load_thresholds
 from ru_routing.fetch import FetchedSource
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.package import (
@@ -105,17 +106,11 @@ _REMOVAL_AFFECTED_CATEGORY_KEYS = frozenset(
         "server:ru-services",
     }
 )
-_MIGRATION_THRESHOLDS = ThresholdPolicy(
-    category_count_change_ratio=0.5,
-    size_change_ratio=0.5,
-    source_removal_migrations=(
-        SourceRemovalMigration(
-            removed_source_ids=_REMOVED_SOURCE_IDS,
-            reset_category_keys=_REMOVAL_AFFECTED_CATEGORY_KEYS,
-            reset_size=True,
-        ),
-    ),
+_CURRENT_POLICY_CONFIGS = PolicyConfigs(
+    source_registry_bytes=Path("config/sources.yaml").read_bytes(),
+    category_mapping_bytes=Path("config/categories.yaml").read_bytes(),
 )
+_MIGRATION_THRESHOLDS = load_thresholds(Path("config/thresholds.yaml"))
 
 
 def _metadata(
@@ -207,7 +202,7 @@ def _source_removal_metadata(
     build = _build_without_ru_ip()
     return BuildMetadata(
         build=build,
-        policy_configs=_policy_configs(sources=b"sources-after-reviewed-removal"),
+        policy_configs=_CURRENT_POLICY_CONFIGS,
         sources=tuple(_fetched_source(source_id) for source_id in current_source_ids),
         conflicts=build.conflicts,
         thresholds=_MIGRATION_THRESHOLDS,
@@ -219,7 +214,10 @@ def _source_removal_metadata(
 
 def _pre_removal_manifest() -> dict:
     previous = _previous_manifest()
-    previous["policy_fingerprint"] = policy_fingerprint(_policy_configs())
+    (source_removal,) = _MIGRATION_THRESHOLDS.source_removal_migrations
+    previous["policy_fingerprint"] = (
+        source_removal.expected_previous_policy_fingerprint
+    )
     previous["sources"] = _source_manifest_entries(
         (*_CURRENT_SOURCE_IDS, *_REMOVED_SOURCE_IDS)
     )
@@ -336,6 +334,27 @@ def test_plan_release_unapproved_source_removal_cannot_reset_baseline():
         (*_CURRENT_SOURCE_IDS, "unapproved/example")
     )
     metadata = _source_removal_metadata(previous=previous)
+
+    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+        plan_release(metadata)
+
+
+def test_plan_release_wrong_valid_previous_policy_cannot_reset_baseline():
+    previous = _pre_removal_manifest()
+    previous["policy_fingerprint"] = "f" * 64
+    metadata = _source_removal_metadata(previous=previous)
+
+    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+        plan_release(metadata)
+
+
+def test_plan_release_wrong_valid_current_policy_cannot_reset_baseline():
+    previous = _pre_removal_manifest()
+    metadata = _source_removal_metadata(previous=previous)
+    metadata = replace(
+        metadata,
+        policy_configs=_policy_configs(sources=b"unapproved-current-policy"),
+    )
 
     with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
         plan_release(metadata)
