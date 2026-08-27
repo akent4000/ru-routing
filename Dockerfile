@@ -11,9 +11,9 @@
 #   - v2fly/domain-list-community ("dlc") and v2fly/geoip, built from source
 #     at pinned upstream commit SHAs (build args, overridable but default to
 #     the reviewed values below);
-#   - sing-box, mihomo, and Xray-core release binaries, downloaded from
-#     GitHub Releases at a pinned version tag and verified against a pinned
-#     SHA-256 checksum before use.
+#   - sing-box, mihomo, Xray-core, GitHub CLI, and AWS CLI release binaries,
+#     downloaded at pinned versions and verified against pinned SHA-256
+#     checksums before use.
 #
 # NOTE: the base image digest and the four pinned release/commit values
 # below were resolved from live upstream metadata during Task 10's
@@ -66,6 +66,10 @@ ARG MIHOMO_VERSION=1.19.30
 ARG MIHOMO_SHA256=cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84
 ARG XRAY_VERSION=26.3.27
 ARG XRAY_SHA256=23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae
+ARG GH_VERSION=2.97.0
+ARG GH_SHA256=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+ARG AWS_CLI_VERSION=2.36.0
+ARG AWS_CLI_SHA256=01cbb710572ec68d049712af6ff985d6a8c2cdf3428093bced3e4373fde7d119
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip \
@@ -95,6 +99,22 @@ RUN set -eu; \
     unzip -q xray.zip xray -d .; \
     rm xray.zip
 
+RUN set -eu; \
+    curl -fsSL -o gh.tar.gz \
+        "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"; \
+    echo "${GH_SHA256}  gh.tar.gz" | sha256sum -c -; \
+    tar -xzf gh.tar.gz --strip-components=2 \
+        "gh_${GH_VERSION}_linux_amd64/bin/gh"; \
+    chmod +x gh; \
+    rm gh.tar.gz
+
+RUN set -eu; \
+    curl -fsSL -o awscliv2.zip \
+        "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip"; \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c -; \
+    unzip -q awscliv2.zip; \
+    rm awscliv2.zip
+
 # --- Final image -------------------------------------------------------
 FROM base AS final
 
@@ -114,8 +134,12 @@ COPY --from=go-builder /out/geoip /usr/local/bin/geoip
 COPY --from=tool-fetcher /out/sing-box /usr/local/bin/sing-box
 COPY --from=tool-fetcher /out/mihomo /usr/local/bin/mihomo
 COPY --from=tool-fetcher /out/xray /usr/local/bin/xray
+COPY --from=tool-fetcher /out/gh /usr/local/bin/gh
+COPY --from=tool-fetcher /out/aws /opt/aws-cli
 RUN chmod +x /usr/local/bin/dlc /usr/local/bin/geoip \
-        /usr/local/bin/sing-box /usr/local/bin/mihomo /usr/local/bin/xray
+        /usr/local/bin/sing-box /usr/local/bin/mihomo /usr/local/bin/xray \
+        /usr/local/bin/gh \
+    && ln -s /opt/aws-cli/dist/aws /usr/local/bin/aws
 
 WORKDIR /work
 COPY pyproject.toml /work/pyproject.toml

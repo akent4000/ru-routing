@@ -20,7 +20,13 @@ leak in a shell command.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -30,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOWS_DIR / "ci.yml"
 UPDATE_PATH = WORKFLOWS_DIR / "update.yml"
+DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
 
 # Secrets that must never be referenced in ci.yml (publish-capable /
 # sensitive credentials only -- not the non-sensitive R2/Cloudflare
@@ -40,6 +47,7 @@ _PUBLISH_SECRETS = (
     "R2_SECRET_ACCESS_KEY",
     "CLOUDFLARE_API_TOKEN",
 )
+_PUBLISH_SECRET_ENV_NAMES = {*_PUBLISH_SECRETS, "GH_TOKEN"}
 
 
 def _load_yaml(path: Path) -> dict:
@@ -68,6 +76,83 @@ def _all_run_steps(document: dict) -> list[str]:
             if isinstance(run, str):
                 scripts.append(run)
     return scripts
+
+
+def _logical_shell_lines(script: str) -> list[str]:
+    """Return non-empty shell commands with backslash continuations joined."""
+
+    joined = re.sub(r"\\\s*\n\s*", " ", script)
+    return [line.strip() for line in joined.splitlines() if line.strip()]
+
+
+def _step_by_id(document: dict, step_id: str) -> dict:
+    matches = [
+        step
+        for job in _all_jobs(document).values()
+        for step in job.get("steps", [])
+        if step.get("id") == step_id
+    ]
+    assert len(matches) == 1, f"expected exactly one step with id {step_id!r}"
+    return matches[0]
+
+
+def _publish_job_and_step(document: dict) -> tuple[dict, dict]:
+    matches = []
+    for job in _all_jobs(document).values():
+        for step in job.get("steps", []):
+            run = step.get("run", "")
+            if isinstance(run, str) and re.search(
+                r"(?:ru-routing\s+publish|\bpublish\s+--dist\b)", run
+            ):
+                matches.append((job, step))
+    assert len(matches) == 1, "expected exactly one step invoking publish --dist"
+    return matches[0]
+
+
+def _secret_backed_env_names(document: dict) -> set[str]:
+    names: set[str] = set()
+    scopes = [document]
+    for job in _all_jobs(document).values():
+        scopes.append(job)
+        scopes.extend(job.get("steps", []))
+    for scope in scopes:
+        for name, value in scope.get("env", {}).items():
+            if isinstance(value, str) and re.fullmatch(
+                r"\$\{\{\s*(?:secrets\.[A-Za-z_][A-Za-z0-9_]*|github\.token)\s*}}",
+                value,
+            ):
+                names.add(name)
+    return names
+
+
+@contextmanager
+def _http_responses(responses: list[tuple[int, bytes]]):
+    requests: list[int] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib handler API
+            index = min(len(requests), len(responses) - 1)
+            status, body = responses[index]
+            requests.append(status)
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A002 - stdlib handler API
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}/manifest.json", requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 # ---------------------------------------------------------------------------
@@ -128,16 +213,16 @@ def test_ci_never_runs_a_live_fetch():
     """
 
     for script in _all_run_steps(_load_yaml(CI_PATH)):
-        for line in script.splitlines():
-            if "ru-routing fetch" in line:
-                assert "--offline-fixtures" in line, (
+        for command in _logical_shell_lines(script):
+            if "ru-routing fetch" in command:
+                assert "--offline-fixtures" in command, (
                     "ci.yml must not perform a live ru-routing fetch: "
-                    f"{line!r}"
+                    f"{command!r}"
                 )
-            if "ru-routing build" in line or "ru-routing check" in line:
-                assert "--inputs" not in line, (
+            if "ru-routing build" in command or "ru-routing check" in command:
+                assert "--inputs" not in command, (
                     "ci.yml must build only from fixtures, never --inputs "
-                    f"(a live/previously-fetched source tree): {line!r}"
+                    f"(a live/previously-fetched source tree): {command!r}"
                 )
 
 
@@ -170,6 +255,15 @@ def test_ci_uploads_artifacts_on_failure():
 def test_ci_writes_a_job_summary():
     text = _raw_text(CI_PATH)
     assert "GITHUB_STEP_SUMMARY" in text
+
+
+def test_ci_downloads_a_pinned_checksum_verified_actionlint():
+    script = _step_by_id(_load_yaml(CI_PATH), "actionlint")["run"]
+    assert "raw.githubusercontent.com/rhysd/actionlint/main" not in script
+    assert re.search(r"ACTIONLINT_VERSION=[0-9]+\.[0-9]+\.[0-9]+", script)
+    assert re.search(r"ACTIONLINT_SHA256=[0-9a-f]{64}", script)
+    assert "releases/download/v${ACTIONLINT_VERSION}/" in script
+    assert "sha256sum -c -" in script
 
 
 # ---------------------------------------------------------------------------
@@ -206,38 +300,42 @@ def test_update_has_a_concurrency_group():
 def test_update_permissions_are_minimal_contents_write():
     document = _load_yaml(UPDATE_PATH)
     permissions = document.get("permissions")
-    assert permissions is not None, "update.yml must declare explicit permissions"
-    assert isinstance(permissions, dict)
-    assert permissions.get("contents") == "write"
-    # Nothing broader than contents (and possibly id-token/packages for
-    # Docker registry auth) should be granted at workflow level.
-    unexpected = set(permissions) - {"contents", "id-token", "packages"}
-    assert not unexpected, f"unexpectedly broad permissions: {unexpected}"
+    assert permissions == {"contents": "write"}, (
+        "update.yml must grant exactly contents: write and no other permission"
+    )
 
 
 def test_update_has_environment_protection_on_publish_job():
     document = _load_yaml(UPDATE_PATH)
-    jobs = _all_jobs(document)
-    environments = [job.get("environment") for job in jobs.values()]
-    assert any(environments), (
-        "update.yml must reference a GitHub Actions `environment:` "
-        "(e.g. production) on at least one job so repo settings can "
-        "later require reviewers"
+    publish_job, _ = _publish_job_and_step(document)
+    assert publish_job.get("environment"), (
+        "the exact job invoking publish --dist must reference a GitHub Actions "
+        "environment so repository protection applies to publication"
     )
 
 
-def test_update_never_hardcodes_or_prints_secrets():
-    """No `run:` line that echoes/prints also references a sensitive secret."""
+def test_update_secret_backed_env_is_only_forwarded_by_name():
+    """Secret values must not be shell-expanded, logged, or placed in argv."""
 
-    for script in _all_run_steps(_load_yaml(UPDATE_PATH)):
-        for line in script.splitlines():
-            lowered = line.lower()
-            if "echo" not in lowered and "print" not in lowered:
-                continue
-            for secret in _PUBLISH_SECRETS:
-                assert f"secrets.{secret}" not in line, (
-                    f"possible secret echoed in update.yml: {line!r}"
-                )
+    document = _load_yaml(UPDATE_PATH)
+    secret_env_names = _secret_backed_env_names(document)
+    assert set(_PUBLISH_SECRETS) <= secret_env_names <= _PUBLISH_SECRET_ENV_NAMES
+    _, publish_step = _publish_job_and_step(document)
+    publish_script = " ".join(_logical_shell_lines(publish_step["run"]))
+
+    for name in secret_env_names:
+        expansion = re.compile(rf"\$(?:{re.escape(name)}\b|\{{{re.escape(name)}\}})")
+        for script in _all_run_steps(document):
+            assert not expansion.search(script), (
+                f"secret-backed ${name} must never be expanded in run: shell text"
+            )
+        forwarding = re.compile(rf"(?<!\S)-e\s+{re.escape(name)}(?=\s|$)")
+        assert len(forwarding.findall(publish_script)) == 1, (
+            f"{name} must cross into the publish container exactly once as -e NAME"
+        )
+        assert name not in forwarding.sub("", publish_script), (
+            f"{name} may appear in publish shell only as docker -e {name}"
+        )
 
 
 def test_update_references_secrets_and_vars_by_name_not_hardcoded():
@@ -290,36 +388,118 @@ def test_update_publish_step_is_conditionally_gated():
     cannot invoke publish -- not just skip it silently after invoking it.
     """
 
+    _, publish_step = _publish_job_and_step(_load_yaml(UPDATE_PATH))
+    condition = re.sub(r"\s+", " ", str(publish_step.get("if", "")).strip())
+    assert condition == "steps.release_decision.outputs.should_publish == 'true'", (
+        "publish must be gated by exact equality with the release-decision "
+        f"true output, got {condition!r}"
+    )
+
+
+def test_update_publish_receives_the_scoped_github_token():
+    _, publish_step = _publish_job_and_step(_load_yaml(UPDATE_PATH))
+    assert publish_step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
+    script = " ".join(_logical_shell_lines(publish_step["run"]))
+    assert re.search(r"(?<!\S)-e\s+GH_TOKEN(?=\s|$)", script)
+
+
+def test_builder_image_provides_pinned_verified_publish_clis():
+    dockerfile = _raw_text(DOCKERFILE_PATH)
+    for prefix in ("GH", "AWS_CLI"):
+        assert re.search(rf"ARG {prefix}_VERSION=[0-9]+(?:\.[0-9]+)+", dockerfile)
+        assert re.search(rf"ARG {prefix}_SHA256=[0-9a-f]{{64}}", dockerfile)
+        assert f'echo "${{{prefix}_SHA256}}  ' in dockerfile
+    assert "awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" in dockerfile
+    assert "gh_${GH_VERSION}_linux_amd64.tar.gz" in dockerfile
+    assert "/usr/local/bin/aws" in dockerfile
+    assert "/usr/local/bin/gh" in dockerfile
+
+
+def test_update_preflights_publish_clis_inside_builder_image():
+    scripts = _all_run_steps(_load_yaml(UPDATE_PATH))
+    assert any(
+        "command -v gh" in script and "command -v aws" in script
+        for script in scripts
+    )
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not installed")
+@pytest.mark.parametrize(
+    ("responses", "expected_success", "expected_found"),
+    [
+        ([(404, b"not found")], True, "false"),
+        ([(401, b"unauthorized")], False, None),
+        ([(500, b"temporary"), (200, b'{"schema_version": 1}')], True, "true"),
+        ([(200, b"not-json")], False, None),
+        ([(200, b"[]")], False, None),
+        ([(200, b'{"schema_version": 1}')], True, "true"),
+    ],
+)
+def test_previous_manifest_fetch_accepts_only_valid_200_or_404(
+    tmp_path, responses, expected_success, expected_found
+):
+    script = _step_by_id(_load_yaml(UPDATE_PATH), "previous_manifest")["run"]
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    github_output = tmp_path / "github-output"
+    with _http_responses(responses) as (url, requests):
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "GITHUB_OUTPUT": str(github_output),
+                "MANIFEST_URL": url,
+            },
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+    assert (result.returncode == 0) is expected_success, result.stdout + result.stderr
+    output_text = (
+        github_output.read_text(encoding="utf-8")
+        if github_output.exists()
+        else ""
+    )
+    if expected_found is None:
+        assert "found=" not in output_text
+        assert not (output_dir / "previous-manifest.json").exists()
+    else:
+        assert f"found={expected_found}" in output_text
+        assert (output_dir / "previous-manifest.json").exists() is (
+            expected_found == "true"
+        )
+    if len(responses) > 1:
+        assert len(requests) >= len(responses), (
+            "transient HTTP failures must be retried"
+        )
+
+
+def test_update_retains_stage_logs_and_partial_build_outputs_on_failure():
     document = _load_yaml(UPDATE_PATH)
-    publish_step = None
-    publish_job_if = None
-    for job in _all_jobs(document).values():
-        job_if = job.get("if")
-        for step in job.get("steps", []):
-            run = step.get("run", "")
-            # The workflow invokes publish via the Docker entrypoint
-            # (`ru-routing publish ...` inside `docker compose run ...
-            # builder`), so the literal command in the shell script is
-            # `publish --dist ...` rather than a standalone `ru-routing
-            # publish` substring.
-            if isinstance(run, str) and re.search(
-                r"(ru-routing\s+publish|\bpublish\s+--dist\b)", run
-            ):
-                publish_step = step
-                publish_job_if = job_if
-    assert publish_step is not None, (
-        "update.yml must have a step running ru-routing publish"
-    )
-    condition = publish_step.get("if") or publish_job_if
-    assert condition, (
-        "the ru-routing publish step (or its job) must have an `if:` gate "
-        "so an unchanged run cannot invoke publish"
-    )
-    assert "steps." in condition and ".outputs." in condition, (
-        "the gate must be based on a prior step's output (e.g. a "
-        "release-decision/build output), not a hardcoded/always-true "
-        f"condition: {condition!r}"
-    )
+    publish_job, _ = _publish_job_and_step(document)
+    scripts = _all_run_steps(document)
+    for command, log_path in (
+        (r"\bfetch\s+--destination\b", "output/fetch.log"),
+        (r"\bbuild\s+--inputs\b", "output/build.log"),
+        (r"\bpublish\s+--dist\b", "output/publish.log"),
+    ):
+        script = next(script for script in scripts if re.search(command, script))
+        assert "pipefail" in script
+        assert re.search(rf"2>&1\s*\|\s*tee\s+{re.escape(log_path)}", script)
+
+    upload_steps = [
+        step
+        for step in publish_job.get("steps", [])
+        if "upload-artifact" in str(step.get("uses", ""))
+        and "failure()" in str(step.get("if", ""))
+    ]
+    assert len(upload_steps) == 1
+    retained_paths = str(upload_steps[0].get("with", {}).get("path", ""))
+    for path in ("output/fetch.log", "output/build.log", "output/publish.log"):
+        assert path in retained_paths
+    assert "output/dist/" in retained_paths
 
 
 def test_update_job_summary_present():
@@ -344,15 +524,11 @@ def test_update_fetches_previous_manifest_before_build():
 
 
 def _actionlint_available() -> bool:
-    import shutil
-
     return shutil.which("actionlint") is not None
 
 
 @pytest.mark.skipif(not _actionlint_available(), reason="actionlint not installed")
 def test_actionlint_passes():
-    import subprocess
-
     result = subprocess.run(
         ["actionlint", str(CI_PATH), str(UPDATE_PATH)],
         cwd=REPO_ROOT,

@@ -95,26 +95,80 @@ jobs:
           mkdir -p output
           chmod 777 output
 
+      - name: Preflight publish CLI dependencies
+        run: |
+          docker compose run --rm --entrypoint sh builder -c '
+            command -v gh >/dev/null
+            command -v aws >/dev/null
+            gh --version
+            aws --version
+          '
+
       - name: Fetch currently-live manifest.json (previous release pointer)
         id: previous_manifest
         run: |
-          set -eu
-          if curl -fsSL -o output/previous-manifest.json "$MANIFEST_URL"; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no live manifest.json yet (first release) -- continuing without --previous-manifest"
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          manifest_tmp=output/previous-manifest.json.tmp
+          trap 'rm -f "$manifest_tmp"' EXIT
+          set +e
+          http_status="$(
+            curl --fail-with-body --silent --show-error --location \
+              --retry 4 --retry-connrefused \
+              --output "$manifest_tmp" \
+              --write-out '%{http_code}' \
+              "$MANIFEST_URL"
+          )"
+          curl_status=$?
+          set -e
+          case "$http_status" in
+            200)
+              if [ "$curl_status" -ne 0 ]; then
+                echo "manifest download failed with curl status $curl_status" >&2
+                exit "$curl_status"
+              fi
+              python3 - "$manifest_tmp" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          try:
+              with open(path, encoding="utf-8") as handle:
+                  manifest = json.load(handle)
+          except (OSError, json.JSONDecodeError) as error:
+              raise SystemExit(f"downloaded manifest is not valid JSON: {error}") from error
+          if not isinstance(manifest, dict):
+              raise SystemExit("downloaded manifest must be a JSON object")
+          PY
+              mv "$manifest_tmp" output/previous-manifest.json
+              trap - EXIT
+              echo "found=true" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              rm -f "$manifest_tmp"
+              trap - EXIT
+              echo "no live manifest.json yet (first release) -- continuing without --previous-manifest"
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "manifest download failed with HTTP status $http_status (curl status $curl_status)" >&2
+              if [ "$curl_status" -eq 0 ]; then
+                curl_status=1
+              fi
+              exit "$curl_status"
+              ;;
+          esac
 
       - name: Live fetch
         run: |
+          set -euo pipefail
           docker compose run --rm builder \
-            fetch --destination /work/output/fetched
+            fetch --destination /work/output/fetched \
+            2>&1 | tee output/fetch.log
 
       - name: Build (real native toolchain, live inputs)
         id: build
         run: |
-          set -eu
+          set -euo pipefail
           previous_manifest_args=()
           if [ "${{ steps.previous_manifest.outputs.found }}" = "true" ]; then
             previous_manifest_args=(--previous-manifest /work/output/previous-manifest.json)
@@ -122,7 +176,8 @@ jobs:
           docker compose run --rm builder \
             build --inputs /work/output/fetched \
             --dist /work/output/dist \
-            "${previous_manifest_args[@]}"
+            "${previous_manifest_args[@]}" \
+            2>&1 | tee output/build.log
 
       - name: Read release decision from manifest.json
         id: release_decision
@@ -146,12 +201,13 @@ jobs:
         # all.
         if: steps.release_decision.outputs.should_publish == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          set -eu
+          set -euo pipefail
           previous_manifest_args=()
           if [ "${{ steps.previous_manifest.outputs.found }}" = "true" ]; then
             previous_manifest_args=(--previous-manifest /work/output/previous-manifest.json)
@@ -160,11 +216,12 @@ jobs:
             -e R2_ACCOUNT_ID -e R2_ACCESS_KEY_ID -e R2_SECRET_ACCESS_KEY \
             -e R2_BUCKET -e R2_ENDPOINT_URL \
             -e CLOUDFLARE_ZONE_ID -e CLOUDFLARE_API_TOKEN \
-            -e GITHUB_REPOSITORY \
+            -e GITHUB_REPOSITORY -e GH_TOKEN \
             builder \
             publish --dist /work/output/dist \
             "${previous_manifest_args[@]}" \
-            --repo "$GITHUB_REPOSITORY"
+            --repo "$GITHUB_REPOSITORY" \
+            2>&1 | tee output/publish.log
 
       - name: Write job summary
         if: always()
@@ -194,6 +251,10 @@ jobs:
         with:
           name: update-failure-logs
           path: |
+            output/fetch.log
+            output/build.log
+            output/publish.log
+            output/dist/
             output/dist/manifest.json
             output/previous-manifest.json
           if-no-files-found: ignore

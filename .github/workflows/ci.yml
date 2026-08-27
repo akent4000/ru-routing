@@ -67,13 +67,17 @@ jobs:
         if: always()
         id: actionlint
         run: |
-          if command -v actionlint >/dev/null 2>&1; then
-            actionlint .github/workflows/*.yml
-          else
-            echo "actionlint not installed on this runner; downloading pinned release"
-            bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-            ./actionlint .github/workflows/*.yml
-          fi
+          set -euo pipefail
+          ACTIONLINT_VERSION=1.7.12
+          ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --retry 4 --retry-connrefused \
+            --output "$ACTIONLINT_ARCHIVE" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${ACTIONLINT_ARCHIVE}"
+          echo "${ACTIONLINT_SHA256}  ${ACTIONLINT_ARCHIVE}" | sha256sum -c -
+          tar -xzf "$ACTIONLINT_ARCHIVE" actionlint
+          ./actionlint .github/workflows/*.yml
 
       - name: Write job summary
         if: always()
