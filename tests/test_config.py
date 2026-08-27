@@ -7,13 +7,54 @@ from ru_routing.cli import main
 from ru_routing.config import ConfigError, load_policy, load_registry, load_thresholds
 
 EXPECTED_SOURCES = {
-    "hydraponique/roscomvpn-geoip",
     "aireps/geosite",
     "runetfreedom/russia-v2ray-rules-dat",
     "jutsu-dev/ru-route-lists",
-    "itdoginfo/allow-domains",
     "Loyalsoldier/v2ray-rules-dat",
 }
+
+UNVERIFIED_LICENSE_SOURCES = (
+    "hydraponique/roscomvpn-geoip",
+    "itdoginfo/allow-domains",
+)
+
+
+@pytest.mark.parametrize("source_name", UNVERIFIED_LICENSE_SOURCES)
+def test_unverified_license_source_cannot_enter_validated_registry(source_name):
+    registry = load_registry(Path("config/sources.yaml"))
+
+    with pytest.raises(ConfigError, match="unknown source ID"):
+        registry.resolve(source_name)
+
+
+@pytest.mark.parametrize("source_name", UNVERIFIED_LICENSE_SOURCES)
+def test_registry_rejects_reintroduced_source_without_license_review(
+    source_name, tmp_path
+):
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        Path("config/sources.yaml").read_text(encoding="utf-8")
+        + f"""
+  - name: {source_name}
+    url: https://example.test/candidate
+    input_type: plain_text
+    layout: per_category_urls
+    required: true
+    expected_categories: [candidate]
+    category_locations:
+      candidate: https://example.test/candidate
+    attribution: candidate contributors
+    license:
+      spdx: NOASSERTION
+      redistribution_reviewed: false
+    freshness:
+      max_age_hours: 48
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="redistribution_reviewed must be true"):
+        load_registry(path)
 
 
 def test_every_source_is_required_mapped_and_license_reviewed():
@@ -40,7 +81,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         policy.source_categories["aireps/geosite:category-malware"].tier.value == "deny"
     )
     assert policy.source_categories[
-        "hydraponique/roscomvpn-geoip:ru"
+        "runetfreedom/russia-v2ray-rules-dat:ru"
     ].datasets == frozenset({"lite", "server"})
     assert policy.canonical_category("blocked").tier.value == "explicit_blocked"
     assert policy.canonical_category("blocked").datasets == frozenset(
@@ -51,19 +92,25 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         for source in registry.sources
     )
     jutsu = registry.resolve("jutsu-dev/ru-route-lists")
-    itdog = registry.resolve("itdoginfo/allow-domains")
     assert jutsu.layout == "release_assets"
     assert jutsu.category_locations["blocked-domains"] == (
         "https://github.com/jutsu-dev/ru-route-lists/releases/download/"
         "latest/rkn-domains.lst",
     )
-    assert itdog.layout == "per_category_urls"
-    assert all(
-        "/c0376e54d78a606c09d6eafad6dd792964edaead/" in location
-        for locations in itdog.category_locations.values()
-        for location in locations
-    )
     assert thresholds.category_count_change_ratio == 0.5
+    (source_removal,) = thresholds.source_removal_migrations
+    assert source_removal.removed_source_ids == frozenset(UNVERIFIED_LICENSE_SOURCES)
+    assert source_removal.reset_category_keys == frozenset(
+        {
+            "lite:ru",
+            "server:ru",
+            "lite:ru-inside",
+            "server:ru-inside",
+            "server:ru-outside",
+            "server:ru-services",
+        }
+    )
+    assert source_removal.reset_size is True
 
     with pytest.raises(FrozenInstanceError):
         aireps.url = "https://invalid.example"  # type: ignore[misc]
@@ -115,7 +162,7 @@ def test_policy_rejects_inconsistent_canonical_tier_or_dataset_assignments(
 @pytest.mark.parametrize(
     ("replacement", "value"),
     [
-        ("name: hydraponique/roscomvpn-geoip", "name: invalid/source"),
+        ("name: aireps/geosite", "name: invalid/source"),
         ("input_type: geoip_dat", "input_type: unsupported"),
         ("layout: single_artifact", "layout: unsupported"),
     ],

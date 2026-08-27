@@ -66,9 +66,9 @@
         "outboundTag": "direct"
       },
       {
-        "_comment": "Trusted RU and Russia-only CIDRs to DIRECT.",
+        "_comment": "Reviewed RU GeoIP CIDRs to DIRECT.",
         "type": "field",
-        "ip": ["ext:geoip.dat:ru", "ext:geoip.dat:ru-geoip"],
+        "ip": ["ext:geoip.dat:ru-geoip"],
         "outboundTag": "direct"
       }
     ]

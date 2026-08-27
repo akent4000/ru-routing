@@ -99,12 +99,11 @@ the policy source of truth.
 
 | Category | Dataset | Content | Intended/default action |
 | --- | --- | --- | --- |
-| `ru` | lite, server | domains and CIDRs | DIRECT |
+| `ru` | lite, server | domains | DIRECT |
 | `ru-global` | server | domains | trusted RU direct candidate; not in the default example |
 | `blocked` | lite, server | domains and CIDRs | PROXY, before any RU DIRECT match |
 | `ru-inside` | lite, server | domains | DIRECT |
 | `ru-outside` | server | domains | optional deployment-specific/inter-node route |
-| `ru-services` | server | domains | optional deployment-specific/inter-node route |
 | `ru-geoip` | server | CIDRs | DIRECT |
 | `geoip-global` | server | CIDRs | optional global/country policy |
 | `spy` | lite, server | domains | BLOCK |
@@ -120,6 +119,12 @@ the policy source of truth.
 | `github` | server | domains | optional service route |
 | `streaming` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
+
+`hydraponique/roscomvpn-geoip` and `itdoginfo/allow-domains` are excluded from
+the source registry until their upstream redistribution licenses can be
+verified. Consequently, `ru` is currently domain-only, the server-only
+`ru-geoip` category is the reviewed RU CIDR source, and `ru-services` is not
+published. See [LICENSES.md](LICENSES.md) for the evidence and re-enable policy.
 
 Policy precedence is deny (`malware`, `phishing`, `spy`), explicit `blocked`,
 trusted RU direct, then thematic categories. A blocked entry is never allowed

@@ -52,13 +52,6 @@ rule-providers:
     path: ./rule-providers/lite-ru-domain.mrs
     format: mrs
     interval: 86400
-  ru-ipcidr:
-    type: http
-    behavior: ipcidr
-    url: "{{CDN_BASE}}/mihomo/lite/ru-ipcidr.mrs"
-    path: ./rule-providers/lite-ru-ipcidr.mrs
-    format: mrs
-    interval: 86400
   ru-inside:
     type: http
     behavior: domain
@@ -79,7 +72,6 @@ rules:
   - RULE-SET,blocked-ipcidr,proxy
   # 4. Trusted RU and Russia-only traffic to DIRECT.
   - RULE-SET,ru,DIRECT
-  - RULE-SET,ru-ipcidr,DIRECT
   - RULE-SET,ru-inside,DIRECT
   # 5. Unmatched traffic to PROXY (final MATCH rule): lite protects a client
   # behind a VPN, so unrecognized destinations must not silently bypass the

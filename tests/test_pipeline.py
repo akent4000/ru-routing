@@ -23,6 +23,10 @@ from ru_routing.cli import main
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "upstreams" / "registry"
 CONFIG_DIR = REPO_ROOT / "config"
+UNVERIFIED_LICENSE_SOURCES = {
+    "hydraponique/roscomvpn-geoip",
+    "itdoginfo/allow-domains",
+}
 
 
 def _run(args, monkeypatch=None):
@@ -82,6 +86,9 @@ def test_build_fixtures_produces_the_complete_output_contract(tmp_path):
     assert manifest["release_version"]
     assert manifest["sources"]
     assert manifest["category_counts"]
+    assert UNVERIFIED_LICENSE_SOURCES.isdisjoint(
+        source["name"] for source in manifest["sources"]
+    )
 
     # Examples embed the computed release version, not the raw token.
     example_text = (dist / "examples" / "xray" / "lite.json").read_text(

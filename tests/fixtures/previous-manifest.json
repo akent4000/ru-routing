@@ -5,10 +5,10 @@
   "policy_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "sources": [
     {
-      "name": "hydraponique/roscomvpn-geoip",
+      "name": "fixture/geoip",
       "resolved_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "license": {"spdx": "GPL-3.0-only", "redistribution_reviewed": true},
+      "license": {"spdx": "MIT", "redistribution_reviewed": true},
       "observed_freshness_lag_hours": null
     }
   ],

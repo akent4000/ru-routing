@@ -31,7 +31,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from .config import ThresholdPolicy
+from .config import SourceRemovalMigration, ThresholdPolicy
 from .fetch import FetchedSource
 from .resolve import ConflictReport, ResolvedBuild
 
@@ -243,7 +243,21 @@ def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
     previous_policy = previous.get("policy_fingerprint")
     changed = current_content != previous_content or current_policy != previous_policy
 
-    _check_anomalies(metadata, previous=previous)
+    source_removal = _approved_source_removal(
+        previous=previous,
+        current_sources=metadata.sources,
+        migrations=metadata.thresholds.source_removal_migrations,
+        previous_policy=previous_policy,
+        current_policy=current_policy,
+    )
+    _check_anomalies(
+        metadata,
+        previous=previous,
+        reset_category_keys=(
+            source_removal.reset_category_keys if source_removal else frozenset()
+        ),
+        reset_size=source_removal.reset_size if source_removal else False,
+    )
 
     if not changed:
         return ReleaseDecision(
@@ -276,10 +290,79 @@ def _version_string(content_digest: str, built_at: str) -> str:
     return f"{timestamp:%Y.%m.%d.%H%M}-{content_digest[:8]}"
 
 
+def _is_sha256_digest(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _previous_source_names(previous: Mapping[str, object]) -> frozenset[str] | None:
+    raw_sources = previous.get("sources")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        return None
+    names: list[str] = []
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            return None
+        name = raw_source.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        names.append(name)
+    if len(set(names)) != len(names):
+        return None
+    return frozenset(names)
+
+
+def _current_source_names(
+    current_sources: tuple[FetchedSource, ...],
+) -> frozenset[str] | None:
+    names = [source.name for source in current_sources]
+    if (
+        not names
+        or any(not isinstance(name, str) or not name for name in names)
+        or len(set(names)) != len(names)
+    ):
+        return None
+    return frozenset(names)
+
+
+def _approved_source_removal(
+    *,
+    previous: Mapping[str, object],
+    current_sources: tuple[FetchedSource, ...],
+    migrations: tuple[SourceRemovalMigration, ...],
+    previous_policy: object,
+    current_policy: str,
+) -> SourceRemovalMigration | None:
+    if not _is_sha256_digest(previous_policy) or previous_policy == current_policy:
+        return None
+    previous_names = _previous_source_names(previous)
+    current_names = _current_source_names(current_sources)
+    if previous_names is None or current_names is None:
+        return None
+    if not current_names < previous_names:
+        return None
+    removed_names = previous_names - current_names
+    matches = [
+        migration
+        for migration in migrations
+        if migration.removed_source_ids == removed_names
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def _check_anomalies(
     metadata: BuildMetadata,
     *,
     previous: Mapping[str, object] | None,
+    reset_category_keys: frozenset[str] = frozenset(),
+    reset_size: bool = False,
 ) -> None:
     if previous is None:
         return
@@ -289,6 +372,8 @@ def _check_anomalies(
     ratio = metadata.thresholds.category_count_change_ratio
     current_counts = _category_counts(metadata.build)
     for key, previous_count in previous_counts.items():
+        if key in reset_category_keys:
+            continue
         current_count = current_counts.get(key, 0)
         if not isinstance(previous_count, (int, float)) or previous_count <= 0:
             continue
@@ -300,7 +385,7 @@ def _check_anomalies(
                 f"({previous_count} -> {current_count})"
             )
     previous_size = previous.get("total_size_bytes")
-    if isinstance(previous_size, (int, float)) and previous_size > 0:
+    if not reset_size and isinstance(previous_size, (int, float)) and previous_size > 0:
         current_size = _content_size_bytes(metadata.build)
         size_ratio = metadata.thresholds.size_change_ratio
         size_change = abs(current_size - previous_size) / previous_size

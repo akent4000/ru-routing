@@ -58,12 +58,6 @@
         "type": "field",
         "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside"],
         "outboundTag": "direct"
-      },
-      {
-        "_comment": "4. Trusted RU and Russia-only CIDRs to DIRECT.",
-        "type": "field",
-        "ip": ["ext:geoip-lite.dat:ru"],
-        "outboundTag": "direct"
       }
     ]
   },

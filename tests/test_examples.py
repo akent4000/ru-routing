@@ -588,9 +588,9 @@ def test_domain_only_categories_fixture_sanity():
     known CIDR-capable categories are not accidentally excluded."""
 
     cidr_capable = _cidr_capable_canonical_categories()
-    for domain_only in ("spy", "malware", "phishing", "ads"):
+    for domain_only in ("ru", "spy", "malware", "phishing", "ads"):
         assert domain_only not in cidr_capable
-    for cidr_category in ("ru", "blocked", "ru-geoip", "geoip-global"):
+    for cidr_category in ("blocked", "ru-geoip", "geoip-global"):
         assert cidr_category in cidr_capable
 
 

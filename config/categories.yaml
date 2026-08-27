@@ -1,5 +1,4 @@
 mappings:
-  - {source: hydraponique/roscomvpn-geoip, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
   - {source: aireps/geosite, source_category: category-ru, canonical_category: ru-global, datasets: [server], tier: trusted_direct}
   - {source: aireps/geosite, source_category: category-ads-all, canonical_category: ads, datasets: [lite, server], tier: thematic}
   - {source: aireps/geosite, source_category: category-tracker, canonical_category: trackers, datasets: [lite, server], tier: thematic}
@@ -20,8 +19,5 @@ mappings:
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
   - {source: jutsu-dev/ru-route-lists, source_category: blocked-domains, canonical_category: blocked, datasets: [lite, server], tier: explicit_blocked}
   - {source: jutsu-dev/ru-route-lists, source_category: blocked-cidrs, canonical_category: blocked, datasets: [lite, server], tier: explicit_blocked}
-  - {source: itdoginfo/allow-domains, source_category: inside, canonical_category: ru-inside, datasets: [lite, server], tier: trusted_direct}
-  - {source: itdoginfo/allow-domains, source_category: outside, canonical_category: ru-outside, datasets: [server], tier: thematic}
-  - {source: itdoginfo/allow-domains, source_category: services, canonical_category: ru-services, datasets: [server], tier: thematic}
   - {source: Loyalsoldier/v2ray-rules-dat, source_category: geoip-ru, canonical_category: ru-geoip, datasets: [server], tier: trusted_direct}
   - {source: Loyalsoldier/v2ray-rules-dat, source_category: geoip-global, canonical_category: geoip-global, datasets: [server], tier: thematic}

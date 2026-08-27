@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ru_routing.config import LicenseMetadata, ThresholdPolicy
+from ru_routing.config import LicenseMetadata, SourceRemovalMigration, ThresholdPolicy
 from ru_routing.fetch import FetchedSource
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.package import (
@@ -43,6 +43,12 @@ def _build(*, extra: bool = False) -> ResolvedBuild:
     return ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
 
 
+def _build_without_ru_ip() -> ResolvedBuild:
+    previous_shape = _build()
+    dataset = Dataset({"blocked": previous_shape.lite.categories["blocked"]})
+    return ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
+
+
 def _policy_configs(
     *, sources: bytes = b"sources-v1", categories: bytes = b"categories-v1"
 ) -> PolicyConfigs:
@@ -53,12 +59,12 @@ def _policy_configs(
     )
 
 
-def _fetched_source(name: str = "hydraponique/roscomvpn-geoip") -> FetchedSource:
+def _fetched_source(name: str = "fixture/geoip") -> FetchedSource:
     return FetchedSource(
         name=name,
         resolved_revision="a" * 40,
         sha256="b" * 64,
-        license=LicenseMetadata(spdx="GPL-3.0-only", redistribution_reviewed=True),
+        license=LicenseMetadata(spdx="MIT", redistribution_reviewed=True),
         object_paths={},
         observed_freshness_lag_hours=None,
     )
@@ -75,6 +81,40 @@ def _write_dist(dist: Path) -> None:
 
 _DEFAULT_THRESHOLDS = ThresholdPolicy(
     category_count_change_ratio=0.5, size_change_ratio=0.5
+)
+
+_CURRENT_SOURCE_IDS = (
+    "aireps/geosite",
+    "runetfreedom/russia-v2ray-rules-dat",
+    "jutsu-dev/ru-route-lists",
+    "Loyalsoldier/v2ray-rules-dat",
+)
+_REMOVED_SOURCE_IDS = frozenset(
+    {
+        "hydraponique/roscomvpn-geoip",
+        "itdoginfo/allow-domains",
+    }
+)
+_REMOVAL_AFFECTED_CATEGORY_KEYS = frozenset(
+    {
+        "lite:ru",
+        "server:ru",
+        "lite:ru-inside",
+        "server:ru-inside",
+        "server:ru-outside",
+        "server:ru-services",
+    }
+)
+_MIGRATION_THRESHOLDS = ThresholdPolicy(
+    category_count_change_ratio=0.5,
+    size_change_ratio=0.5,
+    source_removal_migrations=(
+        SourceRemovalMigration(
+            removed_source_ids=_REMOVED_SOURCE_IDS,
+            reset_category_keys=_REMOVAL_AFFECTED_CATEGORY_KEYS,
+            reset_size=True,
+        ),
+    ),
 )
 
 
@@ -155,6 +195,41 @@ def _previous_manifest() -> dict:
     return json.loads((FIXTURES / "previous-manifest.json").read_text())
 
 
+def _source_manifest_entries(source_ids) -> list[dict[str, str]]:
+    return [{"name": source_id} for source_id in source_ids]
+
+
+def _source_removal_metadata(
+    *,
+    previous: dict,
+    current_source_ids=_CURRENT_SOURCE_IDS,
+) -> BuildMetadata:
+    build = _build_without_ru_ip()
+    return BuildMetadata(
+        build=build,
+        policy_configs=_policy_configs(sources=b"sources-after-reviewed-removal"),
+        sources=tuple(_fetched_source(source_id) for source_id in current_source_ids),
+        conflicts=build.conflicts,
+        thresholds=_MIGRATION_THRESHOLDS,
+        previous_manifest=previous,
+        built_at="2026-08-26T12:34:00+00:00",
+        tool_versions={"xray": "1.0.0"},
+    )
+
+
+def _pre_removal_manifest() -> dict:
+    previous = _previous_manifest()
+    previous["policy_fingerprint"] = policy_fingerprint(_policy_configs())
+    previous["sources"] = _source_manifest_entries(
+        (*_CURRENT_SOURCE_IDS, *_REMOVED_SOURCE_IDS)
+    )
+    previous["category_counts"] = {
+        category_key: 100 for category_key in _REMOVAL_AFFECTED_CATEGORY_KEYS
+    }
+    previous["total_size_bytes"] = 100_000
+    return previous
+
+
 def test_plan_release_triggers_when_content_changed():
     metadata = _metadata(
         build=_build(extra=True), previous_manifest=_previous_manifest()
@@ -213,6 +288,7 @@ def test_plan_release_computes_version_string_format():
 
 def test_plan_release_fails_on_category_count_anomaly():
     previous = _previous_manifest()
+    previous["policy_fingerprint"] = policy_fingerprint(_policy_configs())
     # previous manifest declares far fewer 'blocked' entries than the current
     # build now has, exceeding the configured change ratio.
     previous["category_counts"] = {
@@ -222,6 +298,75 @@ def test_plan_release_fails_on_category_count_anomaly():
         "server:ru-ip": 1,
     }
     metadata = _metadata(build=_build(extra=True), previous_manifest=previous)
+    with pytest.raises(AnomalyError):
+        plan_release(metadata)
+
+
+def test_plan_release_allows_exact_approved_source_removal_baseline_reset():
+    metadata = _source_removal_metadata(previous=_pre_removal_manifest())
+
+    decision = plan_release(metadata)
+
+    assert decision.should_release is True
+
+
+def test_plan_release_still_blocks_unrelated_anomaly_during_source_removal():
+    previous = _pre_removal_manifest()
+    previous["category_counts"]["lite:blocked"] = 1
+    metadata = _source_removal_metadata(previous=previous)
+
+    with pytest.raises(AnomalyError, match="category lite:blocked"):
+        plan_release(metadata)
+
+
+def test_plan_release_source_replacement_cannot_use_removal_baseline_reset():
+    previous = _pre_removal_manifest()
+    metadata = _source_removal_metadata(
+        previous=previous,
+        current_source_ids=(*_CURRENT_SOURCE_IDS, "replacement/example"),
+    )
+
+    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+        plan_release(metadata)
+
+
+def test_plan_release_unapproved_source_removal_cannot_reset_baseline():
+    previous = _pre_removal_manifest()
+    previous["sources"] = _source_manifest_entries(
+        (*_CURRENT_SOURCE_IDS, "unapproved/example")
+    )
+    metadata = _source_removal_metadata(previous=previous)
+
+    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+        plan_release(metadata)
+
+
+@pytest.mark.parametrize(
+    "prior_metadata_change",
+    [
+        lambda previous: previous.pop("sources"),
+        lambda previous: previous.update(sources=[]),
+        lambda previous: previous.update(sources=[{"name": "malformed"}, None]),
+        lambda previous: previous["sources"].append(previous["sources"][0]),
+        lambda previous: previous.pop("policy_fingerprint"),
+        lambda previous: previous.update(policy_fingerprint="not-a-digest"),
+    ],
+    ids=(
+        "missing-sources",
+        "empty-sources",
+        "malformed-source-entry",
+        "duplicate-source-name",
+        "missing-policy-fingerprint",
+        "malformed-policy-fingerprint",
+    ),
+)
+def test_plan_release_malformed_or_missing_prior_metadata_cannot_reset_baseline(
+    prior_metadata_change,
+):
+    previous = _pre_removal_manifest()
+    prior_metadata_change(previous)
+    metadata = _source_removal_metadata(previous=previous)
+
     with pytest.raises(AnomalyError):
         plan_release(metadata)
 
@@ -306,9 +451,9 @@ def test_package_build_records_source_provenance_license_and_freshness(tmp_path)
     metadata = _metadata()
     manifest = package_build(dist, metadata)
     source_entry = manifest.sources[0]
-    assert source_entry["name"] == "hydraponique/roscomvpn-geoip"
+    assert source_entry["name"] == "fixture/geoip"
     assert source_entry["resolved_revision"] == "a" * 40
-    assert source_entry["license"]["spdx"] == "GPL-3.0-only"
+    assert source_entry["license"]["spdx"] == "MIT"
 
 
 def test_package_build_checksums_are_valid_for_every_public_file(tmp_path):

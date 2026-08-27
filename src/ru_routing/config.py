@@ -14,11 +14,9 @@ from .models import PolicyTier
 
 INITIAL_SOURCE_IDS = frozenset(
     {
-        "hydraponique/roscomvpn-geoip",
         "aireps/geosite",
         "runetfreedom/russia-v2ray-rules-dat",
         "jutsu-dev/ru-route-lists",
-        "itdoginfo/allow-domains",
         "Loyalsoldier/v2ray-rules-dat",
     }
 )
@@ -198,11 +196,34 @@ class CategoryPolicy:
 
 
 @dataclass(frozen=True)
+class SourceRemovalMigration:
+    """Reviewed one-time anomaly baseline resets for an exact source removal."""
+
+    removed_source_ids: frozenset[str]
+    reset_category_keys: frozenset[str]
+    reset_size: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "removed_source_ids", frozenset(self.removed_source_ids)
+        )
+        object.__setattr__(
+            self, "reset_category_keys", frozenset(self.reset_category_keys)
+        )
+
+
+@dataclass(frozen=True)
 class ThresholdPolicy:
-    """Version-controlled anomaly bounds for category counts and total size."""
+    """Version-controlled anomaly bounds and reviewed baseline migrations."""
 
     category_count_change_ratio: float
     size_change_ratio: float
+    source_removal_migrations: tuple[SourceRemovalMigration, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "source_removal_migrations", tuple(self.source_removal_migrations)
+        )
 
 
 def _load_yaml(path: Path) -> Mapping[str, Any]:
@@ -476,13 +497,76 @@ def load_policy(path: Path) -> CategoryPolicy:
     return CategoryPolicy(mappings, canonical_categories)
 
 
+def _unique_string_set(value: Any, context: str) -> frozenset[str]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{context} must be a non-empty list")
+    strings = tuple(_string(item, context) for item in value)
+    if len(set(strings)) != len(strings):
+        raise ConfigError(f"{context} contains duplicates")
+    return frozenset(strings)
+
+
+def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]:
+    if not isinstance(value, list):
+        raise ConfigError("source_removal_migrations must be a list")
+    migrations: list[SourceRemovalMigration] = []
+    seen_removed_sets: set[frozenset[str]] = set()
+    for index, raw_migration in enumerate(value):
+        context = f"source_removal_migrations[{index}]"
+        if not isinstance(raw_migration, dict):
+            raise ConfigError(f"{context} must be a mapping")
+        _require_fields(
+            raw_migration,
+            {"removed_source_ids", "reset_category_keys", "reset_size"},
+            context,
+        )
+        removed_source_ids = _unique_string_set(
+            raw_migration["removed_source_ids"], f"{context}.removed_source_ids"
+        )
+        if removed_source_ids in seen_removed_sets:
+            raise ConfigError(
+                f"{context}.removed_source_ids duplicates another migration"
+            )
+        seen_removed_sets.add(removed_source_ids)
+        reset_category_keys = _unique_string_set(
+            raw_migration["reset_category_keys"], f"{context}.reset_category_keys"
+        )
+        for category_key in reset_category_keys:
+            dataset, separator, category = category_key.partition(":")
+            if (
+                separator != ":"
+                or dataset not in {"lite", "server"}
+                or not category
+                or ":" in category
+            ):
+                raise ConfigError(
+                    f"{context}.reset_category_keys contains invalid key "
+                    f"{category_key!r}"
+                )
+        reset_size = raw_migration["reset_size"]
+        if not isinstance(reset_size, bool):
+            raise ConfigError(f"{context}.reset_size must be a boolean")
+        migrations.append(
+            SourceRemovalMigration(
+                removed_source_ids=removed_source_ids,
+                reset_category_keys=reset_category_keys,
+                reset_size=reset_size,
+            )
+        )
+    return tuple(migrations)
+
+
 def load_thresholds(path: Path) -> ThresholdPolicy:
-    """Load strict count and total-size anomaly bounds."""
+    """Load strict anomaly bounds and explicitly reviewed baseline migrations."""
 
     document = _load_yaml(path)
     _require_fields(
         document,
-        {"category_count_change_ratio", "size_change_ratio"},
+        {
+            "category_count_change_ratio",
+            "size_change_ratio",
+            "source_removal_migrations",
+        },
         "threshold policy",
     )
     return ThresholdPolicy(
@@ -490,4 +574,7 @@ def load_thresholds(path: Path) -> ThresholdPolicy:
             document["category_count_change_ratio"], "category_count_change_ratio"
         ),
         size_change_ratio=_ratio(document["size_change_ratio"], "size_change_ratio"),
+        source_removal_migrations=_source_removal_migrations(
+            document["source_removal_migrations"]
+        ),
     )
