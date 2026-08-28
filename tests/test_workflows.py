@@ -5,7 +5,7 @@ the properties the design doc's "Change Detection and Versioning" and
 "Validation and Failure Handling" sections require:
 
 - ``ci.yml`` is fixture-only PR validation: no publish-capable permissions,
-  no R2/Cloudflare/GitHub-release secrets referenced anywhere, and no live
+  no object-storage/GitHub-release secrets referenced anywhere, and no live
   upstream fetch.
 - ``update.yml`` is the hourly/manual live-publication workflow: exact cron
   ``17 * * * *``, ``workflow_dispatch``, a ``concurrency`` group, minimal
@@ -39,13 +39,10 @@ UPDATE_PATH = WORKFLOWS_DIR / "update.yml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
 
 # Secrets that must never be referenced in ci.yml (publish-capable /
-# sensitive credentials only -- not the non-sensitive R2/Cloudflare
-# "variables").
+# sensitive credentials only).
 _PUBLISH_SECRETS = (
-    "R2_ACCOUNT_ID",
-    "R2_ACCESS_KEY_ID",
-    "R2_SECRET_ACCESS_KEY",
-    "CLOUDFLARE_API_TOKEN",
+    "YANDEX_S3_ACCESS_KEY_ID",
+    "YANDEX_S3_SECRET_ACCESS_KEY",
 )
 _PUBLISH_SECRET_ENV_NAMES = {*_PUBLISH_SECRETS, "GH_TOKEN"}
 
@@ -341,24 +338,28 @@ def test_update_secret_backed_env_is_only_forwarded_by_name():
 def test_update_references_secrets_and_vars_by_name_not_hardcoded():
     text = _raw_text(UPDATE_PATH)
     required_secrets = (
-        "R2_ACCOUNT_ID",
-        "R2_ACCESS_KEY_ID",
-        "R2_SECRET_ACCESS_KEY",
-        "CLOUDFLARE_API_TOKEN",
-    )
-    required_vars = (
-        "R2_BUCKET",
-        "R2_ENDPOINT_URL",
-        "CLOUDFLARE_ZONE_ID",
+        "YANDEX_S3_ACCESS_KEY_ID",
+        "YANDEX_S3_SECRET_ACCESS_KEY",
     )
     for secret in required_secrets:
         assert f"secrets.{secret}" in text, (
             f"update.yml must reference secrets.{secret}"
         )
-    for variable in required_vars:
-        assert f"vars.{variable}" in text, (
-            f"update.yml must reference vars.{variable}"
-        )
+    assert "https://storage.yandexcloud.net" in text
+
+
+def test_update_has_no_legacy_object_storage_or_cdn_configuration():
+    text = _raw_text(UPDATE_PATH)
+    legacy_identifiers = (
+        "R" + "2_ACCOUNT_ID",
+        "R" + "2_ACCESS_KEY_ID",
+        "R" + "2_SECRET_ACCESS_KEY",
+        "R" + "2_BUCKET",
+        "R" + "2_ENDPOINT_URL",
+        "CLOUD" + "FLARE_ZONE_ID",
+        "CLOUD" + "FLARE_API_TOKEN",
+    )
+    assert all(identifier not in text for identifier in legacy_identifiers)
 
 
 def test_update_never_calls_rollback():

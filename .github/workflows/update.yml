@@ -46,14 +46,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Non-sensitive identifiers (GitHub Actions "variables" per Task 13's
-  # documented split): bucket name, R2 S3-compatible endpoint URL, and
-  # Cloudflare zone id. R2_ACCOUNT_ID/access keys and the Cloudflare API
-  # token are sensitive and are passed as `secrets.*` directly to the
-  # steps/backend that need them, not exported workflow-wide.
-  R2_BUCKET: ${{ vars.R2_BUCKET }}
-  R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
-  CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+  # The publisher targets Yandex Object Storage at
+  # https://storage.yandexcloud.net; its fixed endpoint is not a workflow
+  # variable, so only credentials cross the publish-container boundary.
   MANIFEST_URL: https://routing.akent.site/manifest.json
 
 jobs:
@@ -198,10 +193,8 @@ jobs:
         if: steps.release_decision.outputs.should_publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          YANDEX_S3_ACCESS_KEY_ID: ${{ secrets.YANDEX_S3_ACCESS_KEY_ID }}
+          YANDEX_S3_SECRET_ACCESS_KEY: ${{ secrets.YANDEX_S3_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
           previous_manifest_args=()
@@ -209,9 +202,7 @@ jobs:
             previous_manifest_args=(--previous-manifest /work/output/previous-manifest.json)
           fi
           docker compose run --rm \
-            -e R2_ACCOUNT_ID -e R2_ACCESS_KEY_ID -e R2_SECRET_ACCESS_KEY \
-            -e R2_BUCKET -e R2_ENDPOINT_URL \
-            -e CLOUDFLARE_ZONE_ID -e CLOUDFLARE_API_TOKEN \
+            -e YANDEX_S3_ACCESS_KEY_ID -e YANDEX_S3_SECRET_ACCESS_KEY \
             -e GITHUB_REPOSITORY -e GH_TOKEN \
             builder \
             publish --dist /work/output/dist \
