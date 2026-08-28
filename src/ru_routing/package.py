@@ -27,6 +27,7 @@ import json
 import tarfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -426,6 +427,8 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
     if not destination.is_dir():
         raise PackagingError(f"dist directory is absent: {destination}")
 
+    _install_license_material(destination)
+
     public_files = sorted(
         path
         for path in destination.rglob("*")
@@ -481,6 +484,29 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
     )
     _write_manifest_json(manifest_path, manifest)
     return manifest
+
+
+def _install_license_material(destination: Path) -> None:
+    """Copy the bundled attribution inventory and exact upstream licenses."""
+
+    material = resources.files("ru_routing").joinpath("license_material")
+    try:
+        inventory = material.joinpath("LICENSES.md").read_bytes()
+        upstream = material.joinpath("upstream")
+        license_files = [
+            child.joinpath("LICENSE")
+            for child in sorted(upstream.iterdir(), key=lambda item: item.name)
+            if child.is_dir()
+        ]
+        if not license_files or any(not item.is_file() for item in license_files):
+            raise OSError("upstream license inventory is incomplete")
+        (destination / "LICENSES.md").write_bytes(inventory)
+        for source in license_files:
+            target = destination / "licenses" / "upstream" / source.parent.name
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "LICENSE").write_bytes(source.read_bytes())
+    except (OSError, TypeError) as error:
+        raise PackagingError("packaged license material is unavailable") from error
 
 
 def _manifest_kwargs(manifest: Manifest) -> dict[str, object]:

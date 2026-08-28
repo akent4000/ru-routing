@@ -4,22 +4,9 @@ sources:
     input_type: geosite_dat
     layout: single_artifact
     required: true
-    expected_categories: [category-ru, category-ads-all, category-tracker, category-malware, category-phishing, category-cryptominers, category-google, category-youtube, category-telegram, category-discord, category-meta, category-github, category-streaming, category-ai]
+    expected_categories: [category-ru]
     category_locations:
       category-ru: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-ads-all: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-tracker: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-malware: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-phishing: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-cryptominers: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-google: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-youtube: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-telegram: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-discord: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-meta: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-github: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-streaming: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
-      category-ai: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
     attribution: aireps/geosite, synchronized from v2fly/domain-list-community
     license:
       spdx: MIT
@@ -32,12 +19,21 @@ sources:
     input_type: geosite_dat
     layout: single_artifact
     required: true
-    expected_categories: [ru-blocked, ru-inside, ru-outside, ru]
+    expected_categories: [ru-blocked, ru-available-only-inside, category-ru, category-ads-all, category-public-tracker, win-spy, google, youtube, telegram, discord, meta, github, openai]
     category_locations:
       ru-blocked: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
-      ru-inside: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
-      ru-outside: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
-      ru: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      ru-available-only-inside: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      category-ru: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      category-ads-all: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      category-public-tracker: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      win-spy: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      google: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      youtube: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      telegram: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      discord: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      meta: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      github: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
+      openai: https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
     attribution: runetfreedom/russia-v2ray-rules-dat contributors
     license:
       spdx: GPL-3.0-only
@@ -64,10 +60,9 @@ sources:
     input_type: geoip_dat
     layout: single_artifact
     required: true
-    expected_categories: [geoip-ru, geoip-global]
+    expected_categories: [ru]
     category_locations:
-      geoip-ru: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-      geoip-global: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
+      ru: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
     attribution: Loyalsoldier/v2ray-rules-dat contributors
     license:
       spdx: GPL-3.0-only

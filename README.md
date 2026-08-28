@@ -11,9 +11,10 @@ normalizes conflicts, validates native artifacts, and publishes auditable
   destinations directly, sends explicitly blocked RU destinations through the
   deployment's proxy, blocks `spy`, and sends unmatched traffic through the
   proxy. `ads` and `trackers` are included but opt-in.
-- `server` is a self-contained superset for an egress node. It includes global
-  service and GeoIP categories, blocks malware/phishing/spy/ads, supports
-  selected inter-node routes, and sends unmatched traffic directly.
+- `server` is a self-contained superset for an egress node. It includes the
+  configured service categories and reviewed RU GeoIP category, blocks
+  spy/ads, supports selected inter-node routes, and sends unmatched traffic
+  directly.
 
 For every category shared by both datasets, validation enforces
 `server >= lite` after conflict resolution. Private/local traffic stays in each
@@ -34,6 +35,10 @@ Raw normalized lists are also published below `raw/{lite,server}/`, and
 complete rendered configurations are published below `examples/`. The builder
 image pins these engine versions and the exact `dlc`, `geoip`, Python, and Go
 toolchains; see [Dockerfile](Dockerfile).
+
+Every distribution also carries `LICENSES.md` and the applicable exact
+upstream license files below `licenses/upstream/`; the manifest and
+`SHA256SUMS` cover them like all other public artifacts.
 
 The checked-in templates are:
 
@@ -103,21 +108,16 @@ the policy source of truth.
 | `ru-global` | server | domains | trusted RU direct candidate; not in the default example |
 | `blocked` | lite, server | domains and CIDRs | PROXY, before any RU DIRECT match |
 | `ru-inside` | lite, server | domains | DIRECT |
-| `ru-outside` | server | domains | optional deployment-specific/inter-node route |
 | `ru-geoip` | server | CIDRs | DIRECT |
-| `geoip-global` | server | CIDRs | optional global/country policy |
 | `spy` | lite, server | domains | BLOCK |
 | `ads` | lite, server | domains | lite opt-in; server BLOCK |
 | `trackers` | lite, server | domains | optional tracker policy; Mihomo uses REJECT as its BitTorrent approximation |
-| `malware` | server | domains | BLOCK |
-| `phishing` | server | domains | BLOCK |
 | `google` | server | domains | example named inter-node route |
 | `youtube` | server | domains | example named inter-node route |
 | `telegram` | server | domains | optional service route |
 | `discord` | server | domains | optional service route |
 | `meta` | server | domains | optional service route |
 | `github` | server | domains | optional service route |
-| `streaming` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
 
 `hydraponique/roscomvpn-geoip` and `itdoginfo/allow-domains` are excluded from
@@ -126,9 +126,9 @@ verified. Consequently, `ru` is currently domain-only, the server-only
 `ru-geoip` category is the reviewed RU CIDR source, and `ru-services` is not
 published. See [LICENSES.md](LICENSES.md) for the evidence and re-enable policy.
 
-Policy precedence is deny (`malware`, `phishing`, `spy`), explicit `blocked`,
-trusted RU direct, then thematic categories. A blocked entry is never allowed
-to remain in a conflicting lite DIRECT category.
+Policy precedence is deny (`spy`), explicit `blocked`, trusted RU direct, then
+thematic categories. A blocked entry is never allowed to remain in a
+conflicting lite DIRECT category.
 
 ## Local development and builds
 
@@ -170,11 +170,14 @@ docker compose run --rm builder \
   --dist /work/output/dist
 ```
 
-To refresh the live source snapshot without publishing it:
+To fetch and build the live source snapshot without publishing it:
 
 ```bash
 docker compose run --rm builder \
   fetch --destination /work/output/fetched
+docker compose run --rm builder \
+  build --inputs /work/output/fetched \
+  --dist /work/output/dist
 ```
 
 Inspect `output/fetched/metadata/` before using a new snapshot. Routine live
@@ -318,16 +321,20 @@ docker compose run --rm \
   --repo "$GITHUB_REPOSITORY"
 ```
 
-The command verifies and copies the chosen `/releases/<version>/` objects to
-`/latest/*`, then rewrites the root manifest pointer last. Confirm the new
-`latest_version` and checksums after completion.
+The command requires the manifest's `release_version` to match `VERSION`,
+verifies every chosen `/releases/<version>/` object against that manifest,
+copies the objects to `/latest/*`, replaces root `SHA256SUMS`, and writes the
+complete target manifest with `latest_version` last. It then purges all changed
+pointer/alias paths. Confirm the target fingerprints and checksums after
+completion.
 
 ## Attribution and bad routes
 
 Direct upstream repositories, license evidence, and unresolved license notices
 are recorded in [LICENSES.md](LICENSES.md). The generated manifest records the
 exact source versions, freshness, category counts, and configured license
-status for each build.
+status for each build; the release itself includes this inventory and the
+applicable upstream license texts.
 
 To report an incorrect route, open an issue in this repository and include:
 

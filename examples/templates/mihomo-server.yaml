@@ -33,23 +33,9 @@ proxy-groups:
     # below to route a small representative subset of service categories.
 
 rule-providers:
-  # malware, phishing, spy, and ads are all sourced from aireps/geosite
+  # spy and ads are sourced from runetfreedom/russia-v2ray-rules-dat
   # (domain-only; no CIDR source), so there are no corresponding -ipcidr
   # rule-providers for these categories.
-  malware:
-    type: http
-    behavior: domain
-    url: "{{CDN_BASE}}/mihomo/server/malware-domain.mrs"
-    path: ./rule-providers/server-malware-domain.mrs
-    format: mrs
-    interval: 86400
-  phishing:
-    type: http
-    behavior: domain
-    url: "{{CDN_BASE}}/mihomo/server/phishing-domain.mrs"
-    path: ./rule-providers/server-phishing-domain.mrs
-    format: mrs
-    interval: 86400
   spy:
     type: http
     behavior: domain
@@ -107,11 +93,9 @@ rules:
   # 2. BitTorrent traffic to BLOCK: see the NON-PARITY NOTICE above. Mihomo
   # has no native BitTorrent protocol-detection rule, so the tracker-domain
   # rule-set is applied as the strongest supported approximation, layered on
-  # the malware/phishing/spy/ads blocking below.
+  # the spy/ads blocking below.
   - RULE-SET,trackers,REJECT
-  # 3. malware, phishing, spy, and ads categories to BLOCK.
-  - RULE-SET,malware,REJECT
-  - RULE-SET,phishing,REJECT
+  # 3. spy and ads categories to BLOCK.
   - RULE-SET,spy,REJECT
   - RULE-SET,ads,REJECT
   # 4. Example service categories (google, youtube) routed to the

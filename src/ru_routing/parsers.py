@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
@@ -29,6 +30,52 @@ class GeodataReader(Protocol):
     def read(
         self, input_type: str, category: str, artifact: Path
     ) -> Iterable[GeodataRule]: ...
+
+
+class ProtobufGeodataReader:
+    """Decode v2fly ``GeoSiteList`` and ``GeoIPList`` protobuf artifacts.
+
+    The pinned binary inputs use the small stable wire contract declared in
+    v2fly/v2ray-core's ``app/router/routercommon/common.proto``.  Decoding the
+    needed fields directly keeps live builds independent of an unpinned Python
+    protobuf runtime or a network-fetched Go helper.
+    """
+
+    def __init__(self) -> None:
+        self._categories_by_artifact: dict[Path, dict[str, tuple[bytes, ...]]] = {}
+
+    def read(
+        self, input_type: str, category: str, artifact: Path
+    ) -> Iterable[GeodataRule]:
+        artifact_path = Path(artifact)
+        categories = self._categories_by_artifact.get(artifact_path)
+        if categories is None:
+            try:
+                document = artifact_path.read_bytes()
+            except OSError as error:
+                raise ParseError(
+                    f"{artifact}: cannot read geodata artifact"
+                ) from error
+            artifact_context = f"{artifact}: geodata"
+            grouped: dict[str, list[bytes]] = {}
+            for entry in _message_bytes(document, 1, artifact_context):
+                label = _message_string(entry, 1, artifact_context).casefold()
+                grouped.setdefault(label, []).append(entry)
+            categories = {
+                label: tuple(entries) for label, entries in grouped.items()
+            }
+            self._categories_by_artifact[artifact_path] = categories
+        context = f"{artifact}: {category}"
+        matches = categories.get(category.casefold(), ())
+        if not matches:
+            raise ParseError(f"{context}: category not found in geodata artifact")
+        if len(matches) != 1:
+            raise ParseError(f"{context}: duplicate category in geodata artifact")
+        if input_type == "geosite_dat":
+            return tuple(_decode_geosite(matches[0], context))
+        if input_type == "geoip_dat":
+            return tuple(_decode_geoip(matches[0], context))
+        raise ParseError(f"{context}: unsupported geodata input type {input_type!r}")
 
 
 @dataclass(frozen=True)
@@ -66,6 +113,156 @@ _DLC_KINDS = {
     "keyword": RuleKind.DOMAIN_KEYWORD,
     "regexp": RuleKind.DOMAIN_REGEX,
 }
+
+_GEOSITE_KINDS = {
+    0: RuleKind.DOMAIN_KEYWORD,
+    1: RuleKind.DOMAIN_REGEX,
+    2: RuleKind.DOMAIN_SUFFIX,
+    3: RuleKind.DOMAIN,
+}
+
+
+def _decode_geosite(message: bytes, context: str) -> Iterable[GeodataRule]:
+    for domain in _message_bytes(message, 2, context):
+        domain_type = _message_varint(domain, 1, context, default=0)
+        try:
+            kind = _GEOSITE_KINDS[domain_type]
+        except KeyError as error:
+            raise ParseError(
+                f"{context}: unsupported geosite domain type {domain_type}"
+            ) from error
+        value = _message_string(domain, 2, context)
+        if not value:
+            raise ParseError(f"{context}: geosite domain value is empty")
+        attributes = frozenset(
+            key
+            for attribute in _message_bytes(domain, 3, context)
+            if (key := _decode_attribute(attribute, context)) is not None
+        )
+        yield GeodataRule(kind=kind, value=value, attributes=attributes)
+
+
+def _decode_attribute(message: bytes, context: str) -> str | None:
+    key = _message_string(message, 1, context)
+    if not key:
+        raise ParseError(f"{context}: geosite attribute key is empty")
+    bool_values = _message_varints(message, 2, context)
+    int_values = _message_varints(message, 3, context)
+    if bool_values:
+        return key if bool_values[-1] != 0 else None
+    if int_values:
+        return key
+    raise ParseError(f"{context}: geosite attribute has no typed value")
+
+
+def _decode_geoip(message: bytes, context: str) -> Iterable[GeodataRule]:
+    if _message_varint(message, 3, context, default=0) != 0:
+        raise ParseError(f"{context}: inverse-match GeoIP categories are unsupported")
+    for cidr in _message_bytes(message, 2, context):
+        addresses = _message_bytes(cidr, 1, context)
+        if len(addresses) != 1 or len(addresses[0]) not in {4, 16}:
+            raise ParseError(f"{context}: invalid geodata CIDR address bytes")
+        prefix = _message_varint(cidr, 2, context, default=0)
+        maximum = 32 if len(addresses[0]) == 4 else 128
+        if prefix > maximum:
+            raise ParseError(f"{context}: invalid geodata CIDR prefix {prefix}")
+        try:
+            network = ipaddress.ip_network(
+                (ipaddress.ip_address(addresses[0]), prefix), strict=True
+            )
+        except ValueError as error:
+            raise ParseError(f"{context}: invalid geodata CIDR network") from error
+        yield GeodataRule(kind=RuleKind.CIDR, value=str(network))
+
+
+def _message_string(message: bytes, field: int, context: str) -> str:
+    values = _message_bytes(message, field, context)
+    if not values:
+        return ""
+    try:
+        return values[-1].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ParseError(f"{context}: geodata string is not UTF-8") from error
+
+
+def _message_bytes(message: bytes, field: int, context: str) -> tuple[bytes, ...]:
+    values = []
+    for number, wire_type, value in _protobuf_fields(message, context):
+        if number != field:
+            continue
+        if wire_type != 2:
+            raise ParseError(f"{context}: invalid protobuf wire type for field {field}")
+        values.append(value)
+    return tuple(values)
+
+
+def _message_varints(message: bytes, field: int, context: str) -> tuple[int, ...]:
+    values = []
+    for number, wire_type, value in _protobuf_fields(message, context):
+        if number != field:
+            continue
+        if wire_type != 0:
+            raise ParseError(f"{context}: invalid protobuf wire type for field {field}")
+        values.append(value)
+    return tuple(values)
+
+
+def _message_varint(
+    message: bytes, field: int, context: str, *, default: int
+) -> int:
+    values = _message_varints(message, field, context)
+    return values[-1] if values else default
+
+
+def _protobuf_fields(
+    message: bytes, context: str
+) -> Iterable[tuple[int, int, int | bytes]]:
+    offset = 0
+    while offset < len(message):
+        key, offset = _protobuf_varint(message, offset, context)
+        field = key >> 3
+        wire_type = key & 0x07
+        if field == 0:
+            raise ParseError(f"{context}: invalid protobuf field number")
+        if wire_type == 0:
+            value, offset = _protobuf_varint(message, offset, context)
+        elif wire_type == 1:
+            end = offset + 8
+            if end > len(message):
+                raise ParseError(f"{context}: truncated fixed64 protobuf field")
+            value = message[offset:end]
+            offset = end
+        elif wire_type == 2:
+            length, offset = _protobuf_varint(message, offset, context)
+            end = offset + length
+            if end > len(message):
+                raise ParseError(f"{context}: truncated protobuf bytes field")
+            value = message[offset:end]
+            offset = end
+        elif wire_type == 5:
+            end = offset + 4
+            if end > len(message):
+                raise ParseError(f"{context}: truncated fixed32 protobuf field")
+            value = message[offset:end]
+            offset = end
+        else:
+            raise ParseError(f"{context}: unsupported protobuf wire type {wire_type}")
+        yield field, wire_type, value
+
+
+def _protobuf_varint(
+    message: bytes, offset: int, context: str
+) -> tuple[int, int]:
+    value = 0
+    for shift in range(0, 70, 7):
+        if offset >= len(message):
+            raise ParseError(f"{context}: truncated protobuf varint")
+        byte = message[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, offset
+    raise ParseError(f"{context}: oversized protobuf varint")
 
 
 def parse_source(

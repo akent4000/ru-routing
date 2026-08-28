@@ -86,7 +86,7 @@ from .package import (
     package_build,
     plan_release,
 )
-from .parsers import GeodataRule, ParseError
+from .parsers import GeodataRule, ParseError, ProtobufGeodataReader
 from .publish import (
     CliBackend,
     CloudflareCredentials,
@@ -802,28 +802,14 @@ def _policy_configs(config_root: Path, policy) -> PolicyConfigs:
 def _geodata_reader(arguments: argparse.Namespace):
     """Return the geoip_dat/geosite_dat decoder appropriate to the rule source.
 
-    ``--fixtures`` never contains real v2fly binary geodata (see
-    ``_FixtureGeodataReader``'s docstring), so the deterministic fixture
-    stand-in is always correct there. ``--inputs`` (a real ``fetch`` output)
-    *can* contain real ``geoip_dat``/``geosite_dat`` binaries from live
-    upstreams, but no task through Task 9 implemented a real
-    ``GeodataReader`` (``src/ru_routing/parsers.py``'s ``GeodataReader``
-    protocol has no production implementation anywhere in this codebase --
-    confirmed via a full-repo search during Task 10). Silently reusing the
-    fixture stand-in there would silently corrupt a real production build
-    instead of failing loudly, so --inputs raises a clear, honest error
-    instead until a real decoder exists.
+    ``--fixtures`` contains placeholder bytes and therefore retains its stable
+    synthetic reader. ``--inputs`` is a real fetch output and uses the strict
+    v2fly protobuf reader for the pinned ``geoip_dat``/``geosite_dat`` sources.
     """
 
     if arguments.fixtures is not None:
         return _FixtureGeodataReader()
-    raise PipelineCliError(
-        "no real GeodataReader implementation exists yet for decoding "
-        "fetched geoip_dat/geosite_dat binaries (see parsers.GeodataReader "
-        "and its docstring) -- `build --inputs` cannot process real fetched "
-        "sources until a later task adds one; `build --fixtures` is fully "
-        "supported"
-    )
+    return ProtobufGeodataReader()
 
 
 def _run_build(arguments: argparse.Namespace, dist: Path) -> None:
@@ -1125,7 +1111,7 @@ def _handle_rollback(
         target_manifest = _load_manifest_file(arguments.target_manifest)
         backend = backend_factory(repo)
         version = rollback_release(
-            arguments.version, backend, checksums=target_manifest.checksums
+            arguments.version, backend, target_manifest=target_manifest
         )
     except PublishError as error:
         print(f"ru-routing: rollback failed: {error}", file=sys.stderr)

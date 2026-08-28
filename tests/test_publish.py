@@ -57,6 +57,13 @@ def _manifest(version: str, *, checksums=None) -> Manifest:
         relative: hashlib.sha256(_content_for(version, relative)).hexdigest()
         for relative in _RELATIVE_PATHS
     }
+    artifact_sizes = {
+        key: len(_content_for(version, key)) for key in checksums
+    }
+    sums = "".join(
+        f"{digest}  {relative}\n"
+        for relative, digest in sorted(checksums.items())
+    ).encode()
     return Manifest(
         schema_version="1",
         release_version=version,
@@ -65,9 +72,9 @@ def _manifest(version: str, *, checksums=None) -> Manifest:
         sources=(),
         category_counts={"lite:blocked": 3},
         total_size_bytes=123,
-        artifact_sizes={key: 10 for key in checksums},
+        artifact_sizes=artifact_sizes,
         checksums=checksums,
-        sha256sums_sha256="e" * 64,
+        sha256sums_sha256=hashlib.sha256(sums).hexdigest(),
         tool_versions={},
         conflict_statistics={"overlaps_before": 0, "overlaps_after": 0, "resolved": 0},
         built_at="2026-08-25T00:00:00+00:00",
@@ -108,11 +115,19 @@ def _plan(tmp_path, version: str, *, previous_manifest=None) -> PublishPlan:
 def _seed_prior_release(backend: FakeBackend, version: str) -> Manifest:
     """Populate the backend as though ``version`` was already published."""
 
-    manifest = _manifest(version)
-    for relative, content in (
+    contents = (
         ("xray/geoip.dat", b"prior-geoip"),
         ("sing-box/lite/example.json", b"prior-singbox"),
-    ):
+    )
+    checksums = {
+        relative: hashlib.sha256(content).hexdigest()
+        for relative, content in contents
+    }
+    manifest = replace(
+        _manifest(version, checksums=checksums),
+        artifact_sizes={relative: len(content) for relative, content in contents},
+    )
+    for relative, content in contents:
         backend.put_object(
             f"releases/{version}/{relative}",
             content,
@@ -125,7 +140,6 @@ def _seed_prior_release(backend: FakeBackend, version: str) -> Manifest:
             content_type="application/octet-stream",
             cache_control="public, max-age=300, must-revalidate",
         )
-    manifest = replace(manifest, checksums=dict(manifest.checksums))
     backend.put_object(
         "manifest.json",
         json.dumps({**manifest.to_json_dict(), "latest_version": version}).encode(
@@ -523,10 +537,8 @@ def test_rollback_copies_prior_release_tree_into_latest(tmp_path):
     backend = FakeBackend()
     _seed_prior_release(backend, "2026.08.20.0000-old00000")
     target = _manifest("2026.08.19.0000-older0000")
-    for relative, content in (
-        ("xray/geoip.dat", b"older-geoip"),
-        ("sing-box/lite/example.json", b"older-singbox"),
-    ):
+    for relative in target.checksums:
+        content = _content_for(target.release_version, relative)
         backend.put_object(
             f"releases/2026.08.19.0000-older0000/{relative}",
             content,
@@ -534,12 +546,16 @@ def test_rollback_copies_prior_release_tree_into_latest(tmp_path):
             cache_control="public, max-age=31536000, immutable",
         )
 
-    rollback("2026.08.19.0000-older0000", backend, checksums=target.checksums)
-
-    assert backend.get_object("latest/xray/geoip.dat") == b"older-geoip"
-    assert (
-        backend.get_object("latest/sing-box/lite/example.json") == b"older-singbox"
+    rollback(
+        "2026.08.19.0000-older0000", backend, target_manifest=target
     )
+
+    assert backend.get_object("latest/xray/geoip.dat") == _content_for(
+        target.release_version, "xray/geoip.dat"
+    )
+    assert backend.get_object(
+        "latest/sing-box/lite/example.json"
+    ) == _content_for(target.release_version, "sing-box/lite/example.json")
     manifest_payload = json.loads(backend.get_object("manifest.json"))
     assert manifest_payload["latest_version"] == "2026.08.19.0000-older0000"
 
@@ -548,10 +564,8 @@ def test_rollback_writes_manifest_after_latest_copy():
     backend = FakeBackend()
     _seed_prior_release(backend, "2026.08.20.0000-old00000")
     target = _manifest("2026.08.19.0000-older0000")
-    for relative, content in (
-        ("xray/geoip.dat", b"older-geoip"),
-        ("sing-box/lite/example.json", b"older-singbox"),
-    ):
+    for relative in target.checksums:
+        content = _content_for(target.release_version, relative)
         backend.put_object(
             f"releases/2026.08.19.0000-older0000/{relative}",
             content,
@@ -559,7 +573,9 @@ def test_rollback_writes_manifest_after_latest_copy():
             cache_control="public, max-age=31536000, immutable",
         )
 
-    rollback("2026.08.19.0000-older0000", backend, checksums=target.checksums)
+    rollback(
+        "2026.08.19.0000-older0000", backend, target_manifest=target
+    )
 
     keys = [entry[1] for entry in backend.put_log]
     latest_index = min(i for i, key in enumerate(keys) if key.startswith("latest/"))
@@ -572,10 +588,8 @@ def test_rollback_never_rebuilds_release_only_copies_and_points(tmp_path):
     # immutable tree and writes latest/* + manifest.json.
     backend = FakeBackend()
     target = _manifest("2026.08.19.0000-older0000")
-    for relative, content in (
-        ("xray/geoip.dat", b"older-geoip"),
-        ("sing-box/lite/example.json", b"older-singbox"),
-    ):
+    for relative in target.checksums:
+        content = _content_for(target.release_version, relative)
         backend.put_object(
             f"releases/2026.08.19.0000-older0000/{relative}",
             content,
@@ -586,12 +600,151 @@ def test_rollback_never_rebuilds_release_only_copies_and_points(tmp_path):
         entry for entry in backend.put_log if entry[1].startswith("releases/")
     ]
 
-    rollback("2026.08.19.0000-older0000", backend, checksums=target.checksums)
+    rollback(
+        "2026.08.19.0000-older0000", backend, target_manifest=target
+    )
 
     after_release_puts = [
         entry for entry in backend.put_log if entry[1].startswith("releases/")
     ]
     assert before_release_puts == after_release_puts
+
+
+def test_rollback_installs_complete_target_root_state_and_purges_paths():
+    backend = FakeBackend()
+    current = replace(
+        _manifest("2026.08.20.0000-current0"),
+        content_fingerprint="1" * 64,
+        policy_fingerprint="2" * 64,
+        category_counts={"lite:current": 9},
+        tool_versions={"xray": "current"},
+    )
+    target = replace(
+        _manifest("2026.08.19.0000-target00"),
+        content_fingerprint="a" * 64,
+        policy_fingerprint="b" * 64,
+        category_counts={"lite:target": 3},
+        tool_versions={"xray": "target"},
+    )
+    backend.put_object(
+        "manifest.json",
+        json.dumps(
+            {**current.to_json_dict(), "latest_version": current.release_version}
+        ).encode(),
+        content_type="application/json",
+        cache_control="public, max-age=300, must-revalidate",
+    )
+    backend.put_object(
+        "SHA256SUMS",
+        b"current checksums\n",
+        content_type="text/plain",
+        cache_control="public, max-age=300, must-revalidate",
+    )
+    for relative in target.checksums:
+        backend.put_object(
+            f"releases/{target.release_version}/{relative}",
+            _content_for(target.release_version, relative),
+            content_type="application/octet-stream",
+            cache_control="public, max-age=31536000, immutable",
+        )
+
+    rollback(target.release_version, backend, target_manifest=target)
+
+    expected_root = {**target.to_json_dict(), "latest_version": target.release_version}
+    assert json.loads(backend.get_object("manifest.json")) == expected_root
+    expected_sums = "".join(
+        f"{digest}  {relative}\n"
+        for relative, digest in sorted(target.checksums.items())
+    ).encode()
+    assert backend.get_object("SHA256SUMS") == expected_sums
+    put_keys = [key for _, key in backend.put_log]
+    latest_index = max(
+        i for i, key in enumerate(put_keys) if key.startswith("latest/")
+    )
+    sums_index = max(i for i, key in enumerate(put_keys) if key == "SHA256SUMS")
+    assert latest_index < sums_index
+    assert sums_index < max(
+        i for i, key in enumerate(put_keys) if key == "manifest.json"
+    )
+    assert backend.purged == [
+        tuple(
+            sorted(
+                {"/manifest.json", "/SHA256SUMS"}
+                | {f"/latest/{relative}" for relative in target.checksums}
+            )
+        )
+    ]
+    assert backend.purge_index > backend.put_log[-1][0]
+
+
+def test_rollback_rejects_tampered_immutable_target_before_writing_latest():
+    backend = FakeBackend()
+    target = _manifest("2026.08.19.0000-target00")
+    for relative in target.checksums:
+        content = (
+            b"tampered"
+            if relative == "xray/geoip.dat"
+            else _content_for(target.release_version, relative)
+        )
+        backend.put_object(
+            f"releases/{target.release_version}/{relative}",
+            content,
+            content_type="application/octet-stream",
+            cache_control="public, max-age=31536000, immutable",
+        )
+    before = len(backend.put_log)
+
+    with pytest.raises(PublishError, match=r"xray/geoip.dat.*checksum"):
+        rollback(target.release_version, backend, target_manifest=target)
+
+    assert not any(
+        key.startswith("latest/") for _, key in backend.put_log[before:]
+    )
+    assert "manifest.json" not in backend.objects
+
+
+def test_rollback_verifies_each_latest_copy_before_writing_root_metadata():
+    backend = FakeBackend()
+    target = _manifest("2026.08.19.0000-target00")
+    for relative in target.checksums:
+        backend.put_object(
+            f"releases/{target.release_version}/{relative}",
+            _content_for(target.release_version, relative),
+            content_type="application/octet-stream",
+            cache_control="public, max-age=31536000, immutable",
+        )
+    backend.corrupt_readback_key = "latest/sing-box/lite/example.json"
+
+    with pytest.raises(PublishError, match=r"read-back verification failed"):
+        rollback(target.release_version, backend, target_manifest=target)
+
+    assert "SHA256SUMS" not in backend.objects
+    assert "manifest.json" not in backend.objects
+    assert backend.purged == []
+
+
+def test_rollback_rejects_inconsistent_target_sha256sums_before_copying():
+    backend = FakeBackend()
+    target = replace(
+        _manifest("2026.08.19.0000-target00"),
+        sha256sums_sha256="0" * 64,
+    )
+
+    with pytest.raises(PublishError, match=r"SHA256SUMS hash"):
+        rollback(target.release_version, backend, target_manifest=target)
+
+    assert backend.put_log == []
+    assert backend.purged == []
+
+
+def test_rollback_rejects_version_that_does_not_match_target_manifest():
+    backend = FakeBackend()
+    target = _manifest("2026.08.19.0000-target00")
+
+    with pytest.raises(PublishError, match="does not match target manifest"):
+        rollback("2026.08.18.0000-wrong000", backend, target_manifest=target)
+
+    assert backend.put_log == []
 
 
 def test_publish_backend_protocol_is_satisfied_by_fake_backend():

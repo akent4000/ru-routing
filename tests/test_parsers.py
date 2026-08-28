@@ -2,11 +2,60 @@ from pathlib import Path
 
 import pytest
 
+import ru_routing.parsers as parsers
 from ru_routing.config import FreshnessRule, LicenseMetadata, SourceDefinition
 from ru_routing.models import RuleKind
 from ru_routing.parsers import GeodataRule, ParseError, parse_source
 
 FIXTURES = Path(__file__).parent / "fixtures" / "upstreams"
+
+
+def _varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _protobuf_varint(field: int, value: int) -> bytes:
+    return _varint(field << 3) + _varint(value)
+
+
+def _protobuf_bytes(field: int, value: bytes | str) -> bytes:
+    body = value.encode() if isinstance(value, str) else value
+    return _varint((field << 3) | 2) + _varint(len(body)) + body
+
+
+def _attribute(key: str) -> bytes:
+    return _protobuf_bytes(1, key) + _protobuf_varint(2, 1)
+
+
+def _domain(kind: int, value: str, *attributes: str) -> bytes:
+    return (
+        _protobuf_varint(1, kind)
+        + _protobuf_bytes(2, value)
+        + b"".join(_protobuf_bytes(3, _attribute(item)) for item in attributes)
+    )
+
+
+def _geosite(category: str, *domains: bytes) -> bytes:
+    body = _protobuf_bytes(1, category) + b"".join(
+        _protobuf_bytes(2, domain) for domain in domains
+    )
+    return _protobuf_bytes(1, body)
+
+
+def _cidr(address: bytes, prefix: int) -> bytes:
+    return _protobuf_bytes(1, address) + _protobuf_varint(2, prefix)
+
+
+def _geoip(category: str, *cidrs: bytes) -> bytes:
+    body = _protobuf_bytes(1, category) + b"".join(
+        _protobuf_bytes(2, cidr) for cidr in cidrs
+    )
+    return _protobuf_bytes(1, body)
 
 
 def source(
@@ -114,6 +163,101 @@ def test_parse_source_rejects_binary_geodata_without_a_reader(tmp_path):
 
     with pytest.raises(ParseError, match=r"fixture/source.*ru.*geodata reader"):
         tuple(parse_source(definition, {"ru": (artifact,)}))
+
+
+def test_protobuf_geodata_reader_decodes_geosite_kinds_and_attributes(tmp_path):
+    artifact = tmp_path / "geosite.dat"
+    artifact.write_bytes(
+        _geosite(
+            "CATEGORY-RU",
+            _domain(0, "needle", "ads"),
+            _domain(1, r"^api\.example$"),
+            _domain(2, "suffix.example", "trusted", "ru"),
+            _domain(3, "exact.example"),
+        )
+    )
+
+    rules = tuple(
+        parsers.ProtobufGeodataReader().read(
+            "geosite_dat", "category-ru", artifact
+        )
+    )
+
+    assert [(rule.kind, rule.value, rule.attributes) for rule in rules] == [
+        (RuleKind.DOMAIN_KEYWORD, "needle", frozenset({"ads"})),
+        (RuleKind.DOMAIN_REGEX, r"^api\.example$", frozenset()),
+        (
+            RuleKind.DOMAIN_SUFFIX,
+            "suffix.example",
+            frozenset({"ru", "trusted"}),
+        ),
+        (RuleKind.DOMAIN, "exact.example", frozenset()),
+    ]
+
+
+def test_protobuf_geodata_reader_decodes_geoip_v4_and_v6(tmp_path):
+    artifact = tmp_path / "geoip.dat"
+    artifact.write_bytes(
+        _geoip(
+            "GEOIP-RU",
+            _cidr(bytes([203, 0, 113, 0]), 24),
+            _cidr(bytes.fromhex("20010db8000000000000000000000000"), 32),
+        )
+    )
+
+    rules = tuple(
+        parsers.ProtobufGeodataReader().read("geoip_dat", "geoip-ru", artifact)
+    )
+
+    assert [(rule.kind, rule.value) for rule in rules] == [
+        (RuleKind.CIDR, "203.0.113.0/24"),
+        (RuleKind.CIDR, "2001:db8::/32"),
+    ]
+
+
+def test_protobuf_geodata_reader_rejects_inverse_geoip_categories(tmp_path):
+    artifact = tmp_path / "geoip.dat"
+    category = (
+        _protobuf_bytes(1, "RU")
+        + _protobuf_bytes(2, _cidr(bytes([203, 0, 113, 0]), 24))
+        + _protobuf_varint(3, 1)
+    )
+    artifact.write_bytes(_protobuf_bytes(1, category))
+
+    with pytest.raises(ParseError, match=r"inverse-match"):
+        tuple(parsers.ProtobufGeodataReader().read("geoip_dat", "ru", artifact))
+
+
+def test_protobuf_geodata_reader_rejects_absent_category(tmp_path):
+    artifact = tmp_path / "geosite.dat"
+    artifact.write_bytes(_geosite("OTHER", _domain(3, "other.example")))
+
+    with pytest.raises(ParseError, match=r"category-ru.*not found"):
+        tuple(
+            parsers.ProtobufGeodataReader().read(
+                "geosite_dat", "category-ru", artifact
+            )
+        )
+
+
+def test_protobuf_geodata_reader_uses_one_artifact_snapshot_for_all_categories(
+    tmp_path,
+):
+    artifact = tmp_path / "geosite.dat"
+    artifact.write_bytes(
+        _geosite("ONE", _domain(3, "one.example"))
+        + _geosite("TWO", _domain(3, "two.example"))
+    )
+    reader = parsers.ProtobufGeodataReader()
+
+    assert [rule.value for rule in reader.read("geosite_dat", "one", artifact)] == [
+        "one.example"
+    ]
+    artifact.write_bytes(_geosite("ONE", _domain(3, "changed.example")))
+
+    assert [rule.value for rule in reader.read("geosite_dat", "two", artifact)] == [
+        "two.example"
+    ]
 
 
 def test_parse_source_rejects_an_undeclared_plain_text_layout(tmp_path):

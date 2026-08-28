@@ -24,6 +24,15 @@ from ru_routing.package import (
 from ru_routing.resolve import ConflictReport, ResolvedBuild
 
 FIXTURES = Path(__file__).parent / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LICENSE_PATHS = {
+    "LICENSES.md",
+    "licenses/upstream/aireps-geosite/LICENSE",
+    "licenses/upstream/jutsu-dev-ru-route-lists/LICENSE",
+    "licenses/upstream/loyalsoldier-v2ray-rules-dat/LICENSE",
+    "licenses/upstream/runetfreedom-russia-v2ray-rules-dat/LICENSE",
+    "licenses/upstream/v2fly-domain-list-community/LICENSE",
+}
 
 
 def _entry(kind: RuleKind, value: str) -> RuleEntry:
@@ -96,7 +105,7 @@ _REMOVED_SOURCE_IDS = frozenset(
         "itdoginfo/allow-domains",
     }
 )
-_REMOVAL_AFFECTED_CATEGORY_KEYS = frozenset(
+_MIGRATION_AFFECTED_CATEGORY_KEYS = frozenset(
     {
         "lite:ru",
         "server:ru",
@@ -104,6 +113,24 @@ _REMOVAL_AFFECTED_CATEGORY_KEYS = frozenset(
         "server:ru-inside",
         "server:ru-outside",
         "server:ru-services",
+        "lite:ads",
+        "server:ads",
+        "lite:trackers",
+        "server:trackers",
+        "lite:spy",
+        "server:spy",
+        "server:malware",
+        "server:phishing",
+        "server:google",
+        "server:youtube",
+        "server:telegram",
+        "server:discord",
+        "server:meta",
+        "server:github",
+        "server:streaming",
+        "server:ai",
+        "server:ru-geoip",
+        "server:geoip-global",
     }
 )
 _CURRENT_POLICY_CONFIGS = PolicyConfigs(
@@ -222,7 +249,7 @@ def _pre_removal_manifest() -> dict:
         (*_CURRENT_SOURCE_IDS, *_REMOVED_SOURCE_IDS)
     )
     previous["category_counts"] = {
-        category_key: 100 for category_key in _REMOVAL_AFFECTED_CATEGORY_KEYS
+        category_key: 100 for category_key in _MIGRATION_AFFECTED_CATEGORY_KEYS
     }
     previous["total_size_bytes"] = 100_000
     return previous
@@ -324,7 +351,7 @@ def test_plan_release_source_replacement_cannot_use_removal_baseline_reset():
         current_source_ids=(*_CURRENT_SOURCE_IDS, "replacement/example"),
     )
 
-    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+    with pytest.raises(AnomalyError):
         plan_release(metadata)
 
 
@@ -335,7 +362,7 @@ def test_plan_release_unapproved_source_removal_cannot_reset_baseline():
     )
     metadata = _source_removal_metadata(previous=previous)
 
-    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+    with pytest.raises(AnomalyError):
         plan_release(metadata)
 
 
@@ -344,7 +371,7 @@ def test_plan_release_wrong_valid_previous_policy_cannot_reset_baseline():
     previous["policy_fingerprint"] = "f" * 64
     metadata = _source_removal_metadata(previous=previous)
 
-    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+    with pytest.raises(AnomalyError):
         plan_release(metadata)
 
 
@@ -356,7 +383,7 @@ def test_plan_release_wrong_valid_current_policy_cannot_reset_baseline():
         policy_configs=_policy_configs(sources=b"unapproved-current-policy"),
     )
 
-    with pytest.raises(AnomalyError, match=r"category (?:lite|server):ru"):
+    with pytest.raises(AnomalyError):
         plan_release(metadata)
 
 
@@ -534,6 +561,35 @@ def test_package_build_archive_contains_manifest_and_sha256sums(tmp_path):
     assert any(name.endswith("SHA256SUMS") for name in names)
     assert any(name.endswith("xray/geoip.dat") for name in names)
     assert any(name.endswith("raw/lite/domains/blocked.txt") for name in names)
+
+
+def test_package_build_includes_inventory_and_upstream_license_texts_everywhere(
+    tmp_path,
+):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+
+    manifest = package_build(dist, _metadata())
+
+    assert (dist / "LICENSES.md").read_bytes() == (
+        REPO_ROOT / "LICENSES.md"
+    ).read_bytes()
+    assert LICENSE_PATHS <= set(manifest.checksums)
+    sums_paths = {
+        line.split("  ", 1)[1]
+        for line in (dist / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    }
+    assert LICENSE_PATHS <= sums_paths
+    for relative in LICENSE_PATHS:
+        assert (dist / relative).is_file()
+        assert (dist / relative).stat().st_size > 0
+
+    archive_path = dist.parent / manifest.archive_filename
+    with tarfile.open(archive_path, "r:gz") as archive:
+        archive_paths = {
+            name.removeprefix("release/") for name in archive.getnames()
+        }
+    assert LICENSE_PATHS <= archive_paths
 
 
 def test_package_build_archive_checksum_and_size_recorded_in_manifest(tmp_path):

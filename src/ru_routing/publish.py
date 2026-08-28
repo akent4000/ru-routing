@@ -37,12 +37,11 @@ successful publication. Cleanup failures are reported explicitly via
 ``PublishError`` and never change the manifest pointer or create a public
 GitHub Release.
 
-Rollback (:func:`rollback`) reuses the exact same copy-then-pointer-flip
-primitive that ``publish_release``'s cleanup path uses to restore
-``/latest/*`` from a prior version (see ``_copy_prefix_to_latest`` and
-``_write_manifest_pointer``), sourced from an already-published prior
-version's ``/releases/<version>/`` tree instead of a freshly built one --
-it never rebuilds a release.
+Rollback (:func:`rollback`) reuses the verified copy primitive that
+``publish_release``'s cleanup path uses to restore ``/latest/*`` from a prior
+version. It then installs that target version's checksums and complete
+manifest, with the manifest write last, and purges the changed paths. It never
+rebuilds a release.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping, Protocol, Sequence, runtime_checkable
 
 import httpx
@@ -223,25 +222,27 @@ def publish_release(plan: PublishPlan, backend: PublishBackend) -> str:
 
 
 def rollback(
-    version: str, backend: PublishBackend, *, checksums: Mapping[str, str]
+    version: str, backend: PublishBackend, *, target_manifest: Manifest
 ) -> str:
-    """Roll back ``/latest/*`` and the manifest pointer to a prior ``version``.
+    """Roll back aliases and complete root metadata to a prior ``version``.
 
     Re-copies the already-published ``/releases/<version>/`` tree's objects
-    into ``/latest/*`` and then writes ``manifest.json`` naming ``version``
-    as ``latest_version`` -- the same two-step order ``publish_release``
-    uses for its own ``/latest/*`` update, via the shared
-    ``_copy_prefix_to_latest``/``_write_manifest_pointer`` primitives.
-    Never re-uploads or rebuilds ``/releases/<version>/``.
-
-    ``checksums`` names the relative paths (and their expected sha256, used
-    only for read-back verification of the copy) that make up the prior
-    version's tree -- typically the ``checksums`` field of the manifest
-    that was published alongside that version.
+    into ``/latest/*`` after verifying every source byte against the target
+    manifest. It writes target-derived ``SHA256SUMS`` and the complete target
+    ``manifest.json`` (with ``latest_version``) strictly last, then purges the
+    changed cache paths. Never re-uploads or rebuilds the immutable tree.
     """
 
-    _copy_prefix_to_latest(backend, version, checksums)
-    _write_manifest_pointer(backend, version)
+    _validate_rollback_target(version, target_manifest)
+    _copy_prefix_to_latest(backend, version, target_manifest.checksums)
+    _write_manifest(backend, target_manifest)
+    try:
+        backend.purge_cache(_purge_paths(target_manifest))
+    except Exception as error:
+        raise PublishError(
+            f"rolled back to version {version} but cache purge failed; "
+            "retry the purge -- the target manifest is live"
+        ) from error
     return version
 
 
@@ -320,9 +321,20 @@ def _copy_prefix_to_latest(
     paths to use.
     """
 
-    for relative in sorted(checksums):
+    verified: list[tuple[str, bytes, str]] = []
+    for relative, expected_hash in sorted(checksums.items()):
         source_key = f"releases/{version}/{relative}"
-        content = backend.get_object(source_key)
+        try:
+            content = backend.get_object(source_key)
+        except Exception as error:
+            raise PublishError(f"cannot read immutable target {source_key}") from error
+        if hashlib.sha256(content).hexdigest() != expected_hash:
+            raise PublishError(
+                f"immutable target {source_key} does not match manifest checksum"
+            )
+        verified.append((relative, content, expected_hash))
+
+    for relative, content, expected_hash in verified:
         destination_key = f"latest/{relative}"
         backend.put_object(
             destination_key,
@@ -331,9 +343,7 @@ def _copy_prefix_to_latest(
             cache_control=_REVALIDATE_CACHE_CONTROL,
         )
         readback = backend.get_object(destination_key)
-        if hashlib.sha256(readback).hexdigest() != hashlib.sha256(
-            content
-        ).hexdigest():
+        if hashlib.sha256(readback).hexdigest() != expected_hash:
             raise PublishError(
                 f"read-back verification failed while restoring latest/{relative} "
                 f"from releases/{version}/"
@@ -382,26 +392,58 @@ def _sha256sums_body(manifest: Manifest) -> bytes:
     return "".join(lines).encode("utf-8")
 
 
-def _write_manifest_pointer(backend: PublishBackend, version: str) -> None:
-    """Write ``manifest.json`` naming ``version`` as ``latest_version``.
+def _validate_rollback_target(version: str, manifest: Manifest) -> None:
+    if not version or manifest.release_version != version:
+        raise PublishError(
+            f"rollback version {version!r} does not match target manifest "
+            f"release_version {manifest.release_version!r}"
+        )
+    if manifest.schema_version != "1":
+        raise PublishError("target manifest has an unsupported schema_version")
+    for name, value in (
+        ("content_fingerprint", manifest.content_fingerprint),
+        ("policy_fingerprint", manifest.policy_fingerprint),
+        ("sha256sums_sha256", manifest.sha256sums_sha256),
+    ):
+        if not _is_sha256(value):
+            raise PublishError(f"target manifest has an invalid {name}")
+    if not manifest.checksums:
+        raise PublishError("target manifest has no artifact checksums")
+    if set(manifest.artifact_sizes) != set(manifest.checksums):
+        raise PublishError(
+            "target manifest artifact_sizes and checksums name different paths"
+        )
+    for relative, digest in manifest.checksums.items():
+        path = PurePosixPath(relative)
+        if (
+            not relative
+            or path.is_absolute()
+            or ".." in path.parts
+            or str(path) != relative
+        ):
+            raise PublishError(
+                f"target manifest has an unsafe artifact path: {relative}"
+            )
+        if not _is_sha256(digest):
+            raise PublishError(
+                f"target manifest has an invalid checksum for {relative}"
+            )
+        size = manifest.artifact_sizes[relative]
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise PublishError(f"target manifest has an invalid size for {relative}")
+    if hashlib.sha256(_sha256sums_body(manifest)).hexdigest() != (
+        manifest.sha256sums_sha256
+    ):
+        raise PublishError(
+            "target manifest SHA256SUMS hash does not match its artifact checksums"
+        )
 
-    Used by ``rollback``. Fetches the prior root manifest first (if any) so
-    the write preserves every other manifest field and only flips the
-    pointer, per "rollback... writes manifest.json with that version as
-    latest_version".
-    """
 
-    try:
-        existing = json.loads(backend.get_object("manifest.json"))
-    except Exception:
-        existing = {}
-    payload = {**existing, "latest_version": version}
-    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    backend.put_object(
-        "manifest.json",
-        body,
-        content_type="application/json",
-        cache_control=_REVALIDATE_CACHE_CONTROL,
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
     )
 
 

@@ -2,7 +2,7 @@ category_count_change_ratio: 0.5
 size_change_ratio: 0.5
 source_removal_migrations:
   - expected_previous_policy_fingerprint: 3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92
-    expected_current_policy_fingerprint: df52701b7511491a3a17b7c0d4c08ebdd29fe244ec50e3b27b680c1b59cad3ba
+    expected_current_policy_fingerprint: 77f6abbe8025ba930135dcc0fc6c1a40639a0ede908f07f6f3d5b8503faa7f36
     removed_source_ids:
       - hydraponique/roscomvpn-geoip
       - itdoginfo/allow-domains
@@ -13,4 +13,22 @@ source_removal_migrations:
       - server:ru-inside
       - server:ru-outside
       - server:ru-services
+      - lite:ads
+      - server:ads
+      - lite:trackers
+      - server:trackers
+      - lite:spy
+      - server:spy
+      - server:malware
+      - server:phishing
+      - server:google
+      - server:youtube
+      - server:telegram
+      - server:discord
+      - server:meta
+      - server:github
+      - server:streaming
+      - server:ai
+      - server:ru-geoip
+      - server:geoip-global
     reset_size: true

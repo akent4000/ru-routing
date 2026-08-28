@@ -237,8 +237,8 @@ def test_mihomo_lite_rule_order_and_default():
 
 
 # ---------------------------------------------------------------------------
-# Server: private -> DIRECT, bittorrent -> BLOCK, malware/phishing/spy/ads ->
-# BLOCK, example services -> node-example, default -> DIRECT
+# Server: private -> DIRECT, bittorrent -> BLOCK, spy/ads -> BLOCK, example
+# services -> node-example, default -> DIRECT
 # ---------------------------------------------------------------------------
 
 
@@ -252,7 +252,7 @@ def test_xray_server_rule_order_and_default():
     assert rules[1]["protocol"] == ["bittorrent"]
     assert rules[1]["outboundTag"] == "block"
 
-    deny_categories = {"malware", "phishing", "spy", "ads"}
+    deny_categories = {"spy", "ads"}
     deny_rule = next(
         rule
         for rule in rules
@@ -269,6 +269,8 @@ def test_xray_server_rule_order_and_default():
             and r["outboundTag"] == "block"
             for r in rules
         )
+    assert "malware" not in json.dumps(document)
+    assert "phishing" not in json.dumps(document)
 
     service_rule = next(
         rule for rule in rules if rule.get("outboundTag") == "node-example"
@@ -301,9 +303,11 @@ def test_singbox_server_rule_order_default_and_documents_bittorrent_nonparity():
     deny_rule = next(
         rule
         for rule in rules
-        if rule.get("rule_set") == ["malware", "phishing", "spy", "ads"]
+        if rule.get("rule_set") == ["spy", "ads"]
     )
     assert deny_rule["outbound"] == "block"
+    assert "malware" not in json.dumps(document)
+    assert "phishing" not in json.dumps(document)
 
     service_rule = next(
         rule for rule in rules if rule.get("outbound") == "node-example"
@@ -328,12 +332,14 @@ def test_mihomo_server_rule_order_default_and_documents_bittorrent_nonparity():
     def index_of(prefix):
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))
 
-    malware_index = index_of("RULE-SET,malware,")
-    phishing_index = index_of("RULE-SET,phishing,")
     spy_index = index_of("RULE-SET,spy,")
     ads_index = index_of("RULE-SET,ads,")
-    for rule_index in (malware_index, phishing_index, spy_index, ads_index):
+    for rule_index in (spy_index, ads_index):
         assert rules[rule_index].endswith(",REJECT")
+    assert not any("malware" in rule or "phishing" in rule for rule in rules)
+    assert not any(
+        name in document["rule-providers"] for name in ("malware", "phishing")
+    )
 
     google_index = index_of("RULE-SET,google,")
     assert rules[google_index].endswith(",node-example")
@@ -588,9 +594,9 @@ def test_domain_only_categories_fixture_sanity():
     known CIDR-capable categories are not accidentally excluded."""
 
     cidr_capable = _cidr_capable_canonical_categories()
-    for domain_only in ("ru", "spy", "malware", "phishing", "ads"):
+    for domain_only in ("ru", "spy", "ads"):
         assert domain_only not in cidr_capable
-    for cidr_category in ("blocked", "ru-geoip", "geoip-global"):
+    for cidr_category in ("blocked", "ru-geoip"):
         assert cidr_category in cidr_capable
 
 

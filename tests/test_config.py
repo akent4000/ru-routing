@@ -78,10 +78,13 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
 
     assert aireps.freshness.max_sync_lag_hours == 48
     assert (
-        policy.source_categories["aireps/geosite:category-malware"].tier.value == "deny"
+        policy.source_categories[
+            "runetfreedom/russia-v2ray-rules-dat:win-spy"
+        ].tier.value
+        == "deny"
     )
     assert policy.source_categories[
-        "runetfreedom/russia-v2ray-rules-dat:ru"
+        "runetfreedom/russia-v2ray-rules-dat:category-ru"
     ].datasets == frozenset({"lite", "server"})
     assert policy.canonical_category("blocked").tier.value == "explicit_blocked"
     assert policy.canonical_category("blocked").datasets == frozenset(
@@ -108,6 +111,24 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
             "server:ru-inside",
             "server:ru-outside",
             "server:ru-services",
+            "lite:ads",
+            "server:ads",
+            "lite:trackers",
+            "server:trackers",
+            "lite:spy",
+            "server:spy",
+            "server:malware",
+            "server:phishing",
+            "server:google",
+            "server:youtube",
+            "server:telegram",
+            "server:discord",
+            "server:meta",
+            "server:github",
+            "server:streaming",
+            "server:ai",
+            "server:ru-geoip",
+            "server:geoip-global",
         }
     )
     assert source_removal.reset_size is True
@@ -115,7 +136,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "df52701b7511491a3a17b7c0d4c08ebdd29fe244ec50e3b27b680c1b59cad3ba"
+        "77f6abbe8025ba930135dcc0fc6c1a40639a0ede908f07f6f3d5b8503faa7f36"
     )
 
     with pytest.raises(FrozenInstanceError):

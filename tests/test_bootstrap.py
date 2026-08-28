@@ -171,8 +171,17 @@ status = 0
 if argv[:1] == ["api"]:
     method = option_value("--method", "-X") or "GET"
     if method == "GET":
-        status = 0 if state["environment"] else 1
-        if not status:
+        http_status = int(
+            os.environ.get(
+                "FAKE_GH_HTTP_STATUS", "200" if state["environment"] else "404"
+            )
+        )
+        status = 0 if http_status == 200 else 1
+        if "--include" in argv:
+            print(f"HTTP/2.0 {http_status} fake")
+        if response_body := os.environ.get("FAKE_GH_RESPONSE_BODY"):
+            print(response_body)
+        if http_status == 200:
             print(json.dumps({"name": "production"}))
     elif method == "PUT":
         state["environment"] = True
@@ -253,6 +262,19 @@ def bootstrap_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
 def _run(env: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *arguments],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+def _run_xtrace(
+    env: dict[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-x", str(SCRIPT), *arguments],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -432,6 +454,39 @@ def test_check_rejects_drifted_cache_rule(
     assert "drift" in completed.stderr.lower()
 
 
+def test_check_rejects_extra_semantic_cache_action_parameters(
+    bootstrap_env: tuple[dict[str, str], Path, Path]
+) -> None:
+    env, state_path, _ = bootstrap_env
+    _prepare(bootstrap_env)
+    state = json.loads(state_path.read_text())
+    state["ruleset"]["rules"][0]["action_parameters"]["serve_stale"] = {
+        "disable_stale_while_updating": True
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    completed = _run(env, "--check")
+
+    assert completed.returncode != 0
+    assert "drift" in completed.stderr.lower()
+
+
+def test_check_ignores_only_cloudflare_generated_rule_metadata(
+    bootstrap_env: tuple[dict[str, str], Path, Path]
+) -> None:
+    env, state_path, _ = bootstrap_env
+    _prepare(bootstrap_env)
+    state = json.loads(state_path.read_text())
+    for rule in state["ruleset"]["rules"]:
+        rule["version"] = "17"
+        rule["last_updated"] = "2026-08-28T00:00:00Z"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    completed = _run(env, "--check")
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_secret_values_are_neither_printed_nor_passed_in_argv(
     bootstrap_env: tuple[dict[str, str], Path, Path]
 ) -> None:
@@ -448,6 +503,44 @@ def test_secret_values_are_neither_printed_nor_passed_in_argv(
         "CLOUDFLARE_CACHE_PURGE_TOKEN",
     ]:
         assert env[name] not in observable
+
+
+def test_bash_xtrace_never_prints_or_logs_secret_sentinels(
+    bootstrap_env: tuple[dict[str, str], Path, Path]
+) -> None:
+    env, _, log_path = bootstrap_env
+    secret_names = [
+        "CLOUDFLARE_API_TOKEN",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "CLOUDFLARE_CACHE_PURGE_TOKEN",
+    ]
+    for index, name in enumerate(secret_names, start=1):
+        env[name] = f"XTRACE_SECRET_SENTINEL_{index}_DO_NOT_PRINT"
+
+    completed = _run_xtrace(env, "--apply")
+
+    assert completed.returncode == 0, completed.stderr
+    observable = completed.stdout + completed.stderr + log_path.read_text()
+    for name in secret_names:
+        assert env[name] not in observable
+
+
+def test_non_404_github_environment_api_failure_fails_closed(
+    bootstrap_env: tuple[dict[str, str], Path, Path]
+) -> None:
+    env, _, _ = bootstrap_env
+    _prepare(bootstrap_env)
+    env["FAKE_GH_HTTP_STATUS"] = "403"
+    response_sentinel = "GITHUB_PRIVATE_FAILURE_BODY_DO_NOT_PRINT"
+    env["FAKE_GH_RESPONSE_BODY"] = response_sentinel
+
+    completed = _run(env, "--check")
+
+    assert completed.returncode != 0
+    assert "could not inspect GitHub environment" in completed.stderr
+    assert "is missing" not in completed.stderr
+    assert response_sentinel not in completed.stdout + completed.stderr
 
 
 def test_cloudflare_http_failure_reports_status_without_response_body_or_token(

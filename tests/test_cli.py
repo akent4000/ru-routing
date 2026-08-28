@@ -71,6 +71,13 @@ def _manifest(version: str, *, checksums=None) -> Manifest:
         relative: hashlib.sha256(_content_for(version, relative)).hexdigest()
         for relative in _RELATIVE_PATHS
     }
+    artifact_sizes = {
+        key: len(_content_for(version, key)) for key in checksums
+    }
+    sums = "".join(
+        f"{digest}  {relative}\n"
+        for relative, digest in sorted(checksums.items())
+    ).encode()
     return Manifest(
         schema_version="1",
         release_version=version,
@@ -79,9 +86,9 @@ def _manifest(version: str, *, checksums=None) -> Manifest:
         sources=(),
         category_counts={"lite:blocked": 3},
         total_size_bytes=123,
-        artifact_sizes={key: 10 for key in checksums},
+        artifact_sizes=artifact_sizes,
         checksums=checksums,
-        sha256sums_sha256="e" * 64,
+        sha256sums_sha256=hashlib.sha256(sums).hexdigest(),
         tool_versions={},
         conflict_statistics={"overlaps_before": 0, "overlaps_after": 0, "resolved": 0},
         built_at="2026-08-25T00:00:00+00:00",
@@ -273,3 +280,24 @@ def test_rollback_missing_target_manifest_produces_clear_error(capsys, tmp_path)
     error = capsys.readouterr().err
     assert "rollback failed" in error
     assert "Traceback" not in error
+
+
+def test_rollback_rejects_cli_version_different_from_target_manifest(
+    capsys, tmp_path
+):
+    target = _manifest("2026.08.20.0000-bbbbbbbb")
+    target_path = _write_manifest_file(tmp_path / "target.json", target)
+    arguments = _Namespace(
+        version="2026.08.19.0000-aaaaaaaa",
+        target_manifest=target_path,
+        repo="owner/name",
+    )
+    backend = FakeBackend()
+
+    exit_code = _handle_rollback(
+        arguments, backend_factory=lambda repo: backend
+    )
+
+    assert exit_code != 0
+    assert "does not match target manifest" in capsys.readouterr().err
+    assert backend.put_log == []

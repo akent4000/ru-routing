@@ -19,10 +19,35 @@ from pathlib import Path
 import pytest
 
 from ru_routing.cli import main
+from ru_routing.config import load_registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "upstreams" / "registry"
 CONFIG_DIR = REPO_ROOT / "config"
+
+# Current upstream release contracts captured from the published geosite.dat /
+# geoip.dat artifacts. Keep this independent of config/sources.yaml: the
+# live-input round trip must fail if a policy starts requesting labels that the
+# actual binary producers do not publish.
+_LIVE_BINARY_CATEGORIES = {
+    "aireps/geosite": ("category-ru",),
+    "runetfreedom/russia-v2ray-rules-dat": (
+        "ru-blocked",
+        "ru-available-only-inside",
+        "category-ru",
+        "category-ads-all",
+        "category-public-tracker",
+        "win-spy",
+        "google",
+        "youtube",
+        "telegram",
+        "discord",
+        "meta",
+        "github",
+        "openai",
+    ),
+    "Loyalsoldier/v2ray-rules-dat": ("ru",),
+}
 UNVERIFIED_LICENSE_SOURCES = {
     "hydraponique/roscomvpn-geoip",
     "itdoginfo/allow-domains",
@@ -31,6 +56,70 @@ UNVERIFIED_LICENSE_SOURCES = {
 
 def _run(args, monkeypatch=None):
     return main(args)
+
+
+def _varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _protobuf_varint(field: int, value: int) -> bytes:
+    return _varint(field << 3) + _varint(value)
+
+
+def _protobuf_bytes(field: int, value: bytes | str) -> bytes:
+    body = value.encode() if isinstance(value, str) else value
+    return _varint((field << 3) | 2) + _varint(len(body)) + body
+
+
+def _live_shaped_geodata(
+    input_type: str, categories: tuple[str, ...], source_tag: str
+) -> bytes:
+    entries = []
+    for index, category in enumerate(categories, start=1):
+        if input_type == "geosite_dat":
+            domain = _protobuf_varint(1, 2) + _protobuf_bytes(
+                2, f"category-{index}.{source_tag}.example"
+            )
+            entry = _protobuf_bytes(1, category.upper()) + _protobuf_bytes(2, domain)
+        else:
+            cidr = _protobuf_bytes(1, bytes([198, 51, index, 0]))
+            cidr += _protobuf_varint(2, 24)
+            entry = _protobuf_bytes(1, category.upper()) + _protobuf_bytes(2, cidr)
+        entries.append(_protobuf_bytes(1, entry))
+    return b"".join(entries)
+
+
+def _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest: Path) -> None:
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    for source in registry.sources:
+        categories = _LIVE_BINARY_CATEGORIES.get(source.name)
+        if categories is None:
+            continue
+        document = json.loads(
+            (
+                fetch_dest
+                / "metadata"
+                / f"{source.name.replace('/', '--')}.json"
+            ).read_text(encoding="utf-8")
+        )
+        content = _live_shaped_geodata(
+            source.input_type,
+            categories,
+            source.name.split("/", 1)[0].lower(),
+        )
+        relative = f"objects/live-{source.name.replace('/', '--')}.dat"
+        (fetch_dest / relative).write_bytes(content)
+        for entries in document["objects"].values():
+            for item in entries:
+                item["path"] = relative
+        (
+            fetch_dest / "metadata" / f"{source.name.replace('/', '--')}.json"
+        ).write_text(json.dumps(document), encoding="utf-8")
 
 
 def test_build_fixtures_produces_the_complete_output_contract(tmp_path):
@@ -565,7 +654,7 @@ def test_build_failure_in_publish_swap_leaves_no_orphaned_staging_dir_next(
     assert leftovers == set()
 
 
-def test_build_inputs_reads_a_prior_fetch_output_directory_layout(tmp_path, capsys):
+def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     """--inputs reads a directory shaped like fetch_all's own output: an
     objects/ dir of content-addressed blobs and a metadata/ dir of one JSON
     document per source (see fetch.py's _write_metadata), so `build --inputs`
@@ -591,16 +680,8 @@ def test_build_inputs_reads_a_prior_fetch_output_directory_layout(tmp_path, caps
     assert (fetch_dest / "metadata").is_dir()
     assert (fetch_dest / "objects").is_dir()
 
-    # The registry declares geoip_dat/geosite_dat sources alongside
-    # plain_text ones. No task through Task 9 implemented a real
-    # GeodataReader (src/ru_routing/parsers.py's GeodataReader protocol has
-    # no production implementation anywhere in this codebase), so `build
-    # --inputs` cannot yet safely decode those binary sources -- it fails
-    # loudly and clearly rather than silently reusing the fixture stand-in
-    # (which would corrupt a real build). This is an honest, documented
-    # limitation, not a --inputs wiring bug: --inputs does successfully
-    # locate and read every declared source's fetched object(s) (see
-    # `--inputs` directory-layout contract above) before hitting this wall.
+    _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest)
+
     dist = tmp_path / "dist"
     exit_code = main(
         [
@@ -615,5 +696,8 @@ def test_build_inputs_reads_a_prior_fetch_output_directory_layout(tmp_path, caps
         ]
     )
 
-    assert exit_code == 1
-    assert "GeodataReader" in capsys.readouterr().err
+    assert exit_code == 0
+    manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["release_version"]
+    assert manifest["category_counts"]["lite:ru"] == 1
+    assert manifest["category_counts"]["server:ru-geoip"] == 1

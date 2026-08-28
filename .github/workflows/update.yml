@@ -10,12 +10,8 @@ name: Hourly routing release
 #
 # Design notes (see the Task 12 implementer's final report for detail):
 #
-#   - `ru-routing release-decision --inputs` cannot be used as a cheap
-#     pre-build check: `_geodata_reader()` in src/ru_routing/cli.py raises
-#     PipelineCliError for --inputs because no real GeodataReader exists
-#     yet for decoding live-fetched geoip_dat/geosite_dat binaries (only
-#     --fixtures is supported there). So this workflow always pays for a
-#     full `ru-routing build --inputs`, and treats manifest.json's
+#   - This workflow performs one full `ru-routing build --inputs` and treats
+#     manifest.json's
 #     `release_version` field (null when plan_release decided "no
 #     change", a version string otherwise -- package_build always writes
 #     manifest.json, regardless of the release decision) as the actual,

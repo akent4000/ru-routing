@@ -4,8 +4,6 @@
   "_bittorrent_parity_comment": "NON-PARITY NOTICE: sing-box does not expose an Xray-equivalent 'protocol: [\"bittorrent\"]' traffic-classification rule. Its closest native mechanisms are the 'network'/'protocol' sniffer fields plus 'process_name'/'package_name' rules on supported platforms, none of which reliably classify BitTorrent traffic the way Xray's built-in protocol sniffing does. This example applies the strongest supported policy instead: it enables sniffing and blocks by the 'protocol' condition where the sniffer can label a connection 'bittorrent', but it does not claim full parity with Xray's dedicated BitTorrent detection. Tracker-domain categories (see the 'trackers' rule_set) are an additional layer, not a replacement for protocol detection.",
   "route": {
     "rule_set": [
-      {"tag": "malware", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/malware.srs", "download_detour": "direct"},
-      {"tag": "phishing", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/phishing.srs", "download_detour": "direct"},
       {"tag": "spy", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/spy.srs", "download_detour": "direct"},
       {"tag": "ads", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ads.srs", "download_detour": "direct"},
       {"tag": "google", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/google.srs", "download_detour": "direct"},
@@ -25,8 +23,8 @@
         "outbound": "block"
       },
       {
-        "_comment": "3. malware, phishing, spy, and ads categories to BLOCK.",
-        "rule_set": ["malware", "phishing", "spy", "ads"],
+        "_comment": "3. spy and ads categories to BLOCK.",
+        "rule_set": ["spy", "ads"],
         "outbound": "block"
       },
       {
