@@ -1,4 +1,4 @@
-"""Publish a packaged release to R2 and GitHub, and support manual rollback.
+"""Publish a packaged release to Yandex S3 and GitHub, and support rollback.
 
 Implements the design doc's "Publication and CDN" and "Release Integrity
 and Rollback" sections. A completed :func:`ru_routing.package.package_build`
@@ -13,35 +13,29 @@ and a sibling release archive; this module takes that output (wrapped in a
 3. write the root ``SHA256SUMS`` and then, as the final step, write
    ``/manifest.json`` with the new ``latest_version`` -- the single atomic
    pointer flip. ``manifest.json`` is written strictly last (see
-   ``_write_manifest``) so that a single-object R2 PUT's per-object
+   ``_write_manifest``) so that a single-object S3 PUT's per-object
    atomicity (an S3-compatible PUT either fully lands or fully fails; it
    never leaves partial/ambiguous content visible to a reader) is what
    makes this pointer flip safe: nothing else in the publication sequence
    can fail after ``manifest.json``'s PUT is attempted, so an exception
    from that PUT itself can only mean the pointer never moved;
-4. purge the Cloudflare cache for ``/latest/*`` and ``/manifest.json``.
-
-A draft GitHub Release is created and its assets uploaded *before* R2
+A draft GitHub Release is created and its assets uploaded *before* Yandex S3
 publication begins; it is finalized (made public/non-draft) only after step
 3 has been verified.
 
 Failure handling: any failure at or before step 3 (i.e. before the manifest
 pointer write is confirmed) triggers cleanup -- delete the draft GitHub
-Release, delete the newly uploaded ``/releases/<version>/`` R2 tree, and (if
+Release, delete the newly uploaded ``/releases/<version>/`` S3 tree, and (if
 any ``/latest/*`` objects were already overwritten) restore and verify the
 complete ``/latest/*`` tree from the prior immutable version named by the
-unchanged root manifest. A failure at step 4 (cache purge) does NOT trigger
-cleanup: the manifest pointer has already flipped and the release is live,
-so the correct remedial action is to retry the purge, not to roll back a
-successful publication. Cleanup failures are reported explicitly via
+unchanged root manifest. Cleanup failures are reported explicitly via
 ``PublishError`` and never change the manifest pointer or create a public
 GitHub Release.
 
 Rollback (:func:`rollback`) reuses the verified copy primitive that
 ``publish_release``'s cleanup path uses to restore ``/latest/*`` from a prior
 version. It then installs that target version's checksums and complete
-manifest, with the manifest write last, and purges the changed paths. It never
-rebuilds a release.
+manifest, with the manifest write last. It never rebuilds a release.
 """
 
 from __future__ import annotations
@@ -51,11 +45,9 @@ import json
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Protocol, Sequence, runtime_checkable
-
-import httpx
 
 from .package import Manifest
 from .tooling import ToolRunner
@@ -82,7 +74,7 @@ class PublishPlan:
     named by ``manifest.checksums``, plus ``SHA256SUMS`` and
     ``manifest.json``. ``archive_path`` is the sibling release archive
     (``<version>.tar.gz``) uploaded as the primary GitHub Release asset.
-    ``previous_manifest`` is the manifest currently live in R2's root
+    ``previous_manifest`` is the manifest currently live in the S3 root
     ``manifest.json`` before this publication begins -- it names the prior
     version cleanup restores ``/latest/*`` from if this publication fails
     partway through; ``None`` for an initial release (nothing to restore).
@@ -104,13 +96,12 @@ class _ObjectSpec:
 
 @runtime_checkable
 class PublishBackend(Protocol):
-    """Minimal boundary over R2 (S3-compatible) and GitHub Release operations.
+    """Minimal boundary over S3-compatible and GitHub Release operations.
 
     Modeled after ``ToolExecutor``/``GeodataReader``/``RegexValidator``'s
     narrow Protocol boundaries elsewhere in this codebase: a small set of
     primitives that both ``FakeBackend`` (tests) and ``CliBackend``
-    (production, wrapping ``gh``/``aws s3api``/Cloudflare's HTTP API) can
-    implement.
+    (production, wrapping ``gh`` and ``aws s3api``) can implement.
     """
 
     def put_object(
@@ -126,9 +117,6 @@ class PublishBackend(Protocol):
 
     def delete_prefix(self, prefix: str) -> None:
         """Delete every object under ``prefix`` (an orphaned release tree cleanup)."""
-
-    def purge_cache(self, paths: Sequence[str]) -> None:
-        """Purge the Cloudflare cache for the given absolute paths."""
 
     def create_draft_release(self, version: str, archive_path: Path) -> str:
         """Create a draft GitHub Release for ``version``, upload ``archive_path``.
@@ -190,33 +178,20 @@ def publish_release(plan: PublishPlan, backend: PublishBackend) -> str:
     try:
         backend.finalize_release(release_id)
     except Exception as error:
-        # R2 has already been fully published: the manifest pointer flip
+        # S3 has already been fully published: the manifest pointer flip
         # (step 3) succeeded and consumers are correctly served the new
         # version. The design doc's cleanup section only prescribes
-        # deleting the draft release when R2 publication itself fails
+        # deleting the draft release when S3 publication itself fails
         # (before the pointer flip); it is silent on this later case. We
         # deliberately do NOT delete or otherwise touch the draft release
-        # here: deleting it would not fix anything (R2 is already live and
-        # correct) and would instead orphan that correct R2 state with no
+        # here: deleting it would not fix anything (S3 is already live and
+        # correct) and would instead orphan that correct S3 state with no
         # discoverable GitHub Release at all. The draft is left in place
         # for a human to retry finalization (`gh release edit --draft=false`)
         # or investigate.
         raise PublishError(
-            f"R2 publication succeeded but GitHub Release finalization failed "
+            f"S3 publication succeeded but GitHub Release finalization failed "
             f"for version {version}"
-        ) from error
-
-    try:
-        backend.purge_cache(_purge_paths(plan.manifest))
-    except Exception as error:
-        # Step 4 (cache purge) happens strictly after the atomic manifest
-        # pointer flip (step 3) has already succeeded and the GitHub
-        # Release has already been finalized -- the release is live. A
-        # purge failure must NOT undo the pointer or delete the release;
-        # the only remedial action is to retry the purge later.
-        raise PublishError(
-            f"published version {version} but cache purge failed; "
-            "retry the purge -- the manifest pointer and release are live"
         ) from error
 
     return version
@@ -230,20 +205,13 @@ def rollback(
     Re-copies the already-published ``/releases/<version>/`` tree's objects
     into ``/latest/*`` after verifying every source byte against the target
     manifest. It writes target-derived ``SHA256SUMS`` and the complete target
-    ``manifest.json`` (with ``latest_version``) strictly last, then purges the
-    changed cache paths. Never re-uploads or rebuilds the immutable tree.
+    ``manifest.json`` (with ``latest_version``) strictly last. Never
+    re-uploads or rebuilds the immutable tree.
     """
 
     _validate_rollback_target(version, target_manifest)
     _copy_prefix_to_latest(backend, version, target_manifest.checksums)
     _write_manifest(backend, target_manifest)
-    try:
-        backend.purge_cache(_purge_paths(target_manifest))
-    except Exception as error:
-        raise PublishError(
-            f"rolled back to version {version} but cache purge failed; "
-            "retry the purge -- the target manifest is live"
-        ) from error
     return version
 
 
@@ -507,13 +475,6 @@ def _is_sha256(value: object) -> bool:
     )
 
 
-def _purge_paths(manifest: Manifest) -> tuple[str, ...]:
-    paths = {"/manifest.json", "/SHA256SUMS"}
-    for relative in manifest.checksums:
-        paths.add(f"/latest/{relative}")
-    return tuple(sorted(paths))
-
-
 def _cleanup_failed_publication(
     backend: PublishBackend,
     *,
@@ -548,7 +509,7 @@ def _cleanup_failed_publication(
         backend.delete_prefix(f"releases/{version}/")
     except Exception as cleanup_error:
         cleanup_problems.append(
-            f"failed to delete orphaned R2 tree releases/{version}/: {cleanup_error}"
+            f"failed to delete orphaned S3 tree releases/{version}/: {cleanup_error}"
         )
 
     if latest_overwritten:
@@ -580,7 +541,7 @@ def _cleanup_failed_publication(
 
     raise PublishError(
         f"publication of version {version} failed and was cleaned up "
-        f"(draft release and R2 release tree deleted, /latest/* restored if "
+        f"(draft release and S3 release tree deleted, /latest/* restored if "
         f"needed): {original_error}"
     ) from original_error
 
@@ -608,8 +569,6 @@ class FakeBackend:
     def __init__(self) -> None:
         self.objects: dict[str, _StoredObject] = {}
         self.put_log: list[tuple[str, str]] = []
-        self.purged: list[tuple[str, ...]] = []
-        self.purge_index: int | None = None
         self.deleted_prefixes: list[str] = []
         self.created_release_id: str | None = None
         self.draft_created_index: int | None = None
@@ -620,7 +579,6 @@ class FakeBackend:
         # Failure injection knobs.
         self.fail_put_key: str | None = None
         self.corrupt_readback_key: str | None = None
-        self.fail_purge: bool = False
         self.fail_delete_prefix: bool = False
         self.fail_finalize: bool = False
         self.fail_create_release: bool = False
@@ -661,12 +619,6 @@ class FakeBackend:
         for key in [k for k in self.objects if k.startswith(prefix)]:
             del self.objects[key]
 
-    def purge_cache(self, paths: Sequence[str]) -> None:
-        self.purge_index = self._tick()
-        self.purged.append(tuple(paths))
-        if self.fail_purge:
-            raise RuntimeError("simulated cache purge failure")
-
     def create_draft_release(self, version: str, archive_path: Path) -> str:
         self.draft_created_index = self._tick()
         if self.fail_create_release:
@@ -698,99 +650,61 @@ class FakeBackend:
 
 
 @dataclass(frozen=True)
-class R2Credentials:
-    """R2 (S3-compatible) connection details, treated as external secrets.
+class YandexS3Credentials:
+    """Yandex Object Storage connection details, treated as external secrets.
 
-    Never log an instance of this class or any of its fields. In
-    production these come from GitHub Actions secrets/variables (see the
-    design doc's "Publication and CDN" section); ``from_env`` reads the
-    conventional environment variable names a workflow step would export,
-    but the constructor itself accepts explicit values so callers are free
-    to source them however they choose (a secrets manager, a test
-    fixture, etc.) without this module ever needing to know.
+    Only the static key pair comes from the runtime environment. The bucket
+    and endpoint are fixed by the production deployment, preventing a
+    credentialed publication from being redirected through configuration.
     """
 
-    account_id: str
     access_key_id: str
     secret_access_key: str
-    bucket: str
-    endpoint_url: str
+    bucket: str = field(default="routing.akent.site", init=False)
+    endpoint_url: str = field(default="https://storage.yandexcloud.net", init=False)
 
     def __repr__(self) -> str:  # pragma: no cover -- trivial formatting
         return (
-            f"R2Credentials(bucket={self.bucket!r}, "
+            f"YandexS3Credentials(bucket={self.bucket!r}, "
             f"endpoint_url={self.endpoint_url!r}, "
-            "account_id=<redacted>, access_key_id=<redacted>, "
-            "secret_access_key=<redacted>)"
+            "access_key_id=<redacted>, secret_access_key=<redacted>)"
         )
 
     __str__ = __repr__
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> "R2Credentials":
+    def from_env(cls, env: Mapping[str, str]) -> "YandexS3Credentials":
         try:
             return cls(
-                account_id=env["R2_ACCOUNT_ID"],
-                access_key_id=env["R2_ACCESS_KEY_ID"],
-                secret_access_key=env["R2_SECRET_ACCESS_KEY"],
-                bucket=env["R2_BUCKET"],
-                endpoint_url=env["R2_ENDPOINT_URL"],
+                access_key_id=env["YANDEX_S3_ACCESS_KEY_ID"],
+                secret_access_key=env["YANDEX_S3_SECRET_ACCESS_KEY"],
             )
         except KeyError as error:
-            # Report only the missing variable's *name* -- never dump the
+            # Report only the missing variable's name -- never dump the
             # environment, which could contain unrelated secret values.
             raise PublishError(
-                f"missing required R2 environment variable: {error}"
-            ) from error
-
-
-@dataclass(frozen=True)
-class CloudflareCredentials:
-    """Cloudflare cache-purge API details, treated as external secrets."""
-
-    zone_id: str
-    api_token: str
-
-    def __repr__(self) -> str:  # pragma: no cover -- trivial formatting
-        return (
-            f"CloudflareCredentials(zone_id={self.zone_id!r}, "
-            "api_token=<redacted>)"
-        )
-
-    __str__ = __repr__
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> "CloudflareCredentials":
-        try:
-            return cls(
-                zone_id=env["CLOUDFLARE_ZONE_ID"],
-                api_token=env["CLOUDFLARE_API_TOKEN"],
-            )
-        except KeyError as error:
-            raise PublishError(
-                f"missing required Cloudflare environment variable: {error}"
+                f"missing required Yandex S3 environment variable: {error}"
             ) from error
 
 
 class CliBackend:
-    """Production ``PublishBackend`` wrapping ``gh``, ``aws s3api``, and Cloudflare.
+    """Production ``PublishBackend`` wrapping ``gh`` and ``aws s3api``.
 
     The ``gh``-wrapping methods (``create_draft_release``,
     ``upload_release_asset``, ``finalize_release``, ``delete_release``) go
     through ``ToolRunner`` (the same argv-only, no-shell boundary
     ``generate.py``/``validate.py`` use for native tools). ``_run_aws`` (used
-    by the R2 methods) instead calls ``subprocess.run`` directly, because it
-    needs to pass R2 credentials via ``env=`` -- ``ToolRunner.run`` has no
+    by the S3 methods) instead calls ``subprocess.run`` directly, because it
+    needs to pass Yandex credentials via ``env=`` -- ``ToolRunner.run`` has no
     ``env`` parameter -- but it still follows the same argv-only,
     ``shell=False`` discipline: an explicit list of arguments, never a shell
     command string, so credentials cannot leak through shell history or
     shell expansion either way.
 
-    Credentials (``r2`` / ``cloudflare``) are held only as constructor
-    fields, passed to subprocesses via ``env`` (for the AWS CLI's
-    conventional ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY`` variables)
-    or as an HTTP Authorization header (for Cloudflare) -- never as a
-    literal argv element (which could appear in process listings) and
+    Credentials are held only as constructor fields, passed to subprocesses
+    via the AWS CLI's conventional ``AWS_ACCESS_KEY_ID`` and
+    ``AWS_SECRET_ACCESS_KEY`` environment variables, never as a literal argv
+    element (which could appear in process listings), and
     never interpolated into an exception message or log line anywhere in
     this class. Exceptions raised here include tool argv and stdout/stderr
     (via ``ToolError``) but not the credential-bearing environment.
@@ -799,24 +713,20 @@ class CliBackend:
     def __init__(
         self,
         *,
-        r2: R2Credentials,
-        cloudflare: CloudflareCredentials,
+        yandex_s3: YandexS3Credentials,
         repo: str,
         runner: ToolRunner | None = None,
         gh: str = "gh",
         aws: str = "aws",
         workdir: Path | None = None,
-        http_client: httpx.Client | None = None,
         aws_subprocess_runner=subprocess.run,
     ) -> None:
-        self._r2 = r2
-        self._cloudflare = cloudflare
+        self._yandex_s3 = yandex_s3
         self._repo = repo
         self._runner = runner or ToolRunner()
         self._gh = gh
         self._aws = aws
         self._workdir = Path(workdir) if workdir is not None else Path.cwd()
-        self._http_client = http_client
         # Injectable only so tests can exercise _run_aws's callers (notably
         # delete_prefix's list-objects-v2 pagination loop) without shelling
         # out to a real `aws` binary; production code never overrides this.
@@ -825,8 +735,9 @@ class CliBackend:
     def _aws_env(self) -> dict[str, str]:
         return {
             **os.environ,
-            "AWS_ACCESS_KEY_ID": self._r2.access_key_id,
-            "AWS_SECRET_ACCESS_KEY": self._r2.secret_access_key,
+            "AWS_ACCESS_KEY_ID": self._yandex_s3.access_key_id,
+            "AWS_SECRET_ACCESS_KEY": self._yandex_s3.secret_access_key,
+            "AWS_DEFAULT_REGION": "ru-central1",
         }
 
     def _run_aws(self, argv: Sequence[str]) -> str:
@@ -835,7 +746,13 @@ class CliBackend:
         # AWS_SECRET_ACCESS_KEY passed via the environment (see _aws_env).
         # This still follows the same argv-only, shell=False discipline as
         # ToolRunner -- an explicit argument list, never a shell string.
-        command = [self._aws, "s3api", *argv, "--endpoint-url", self._r2.endpoint_url]
+        command = [
+            self._aws,
+            "s3api",
+            *argv,
+            "--endpoint-url",
+            self._yandex_s3.endpoint_url,
+        ]
         completed = self._aws_subprocess_runner(
             command,
             cwd=self._workdir,
@@ -865,7 +782,7 @@ class CliBackend:
                 [
                     "put-object",
                     "--bucket",
-                    self._r2.bucket,
+                    self._yandex_s3.bucket,
                     "--key",
                     key,
                     "--body",
@@ -887,7 +804,7 @@ class CliBackend:
                 [
                     "get-object",
                     "--bucket",
-                    self._r2.bucket,
+                    self._yandex_s3.bucket,
                     "--key",
                     key,
                     output_path,
@@ -898,7 +815,9 @@ class CliBackend:
             Path(output_path).unlink(missing_ok=True)
 
     def delete_object(self, key: str) -> None:
-        self._run_aws(["delete-object", "--bucket", self._r2.bucket, "--key", key])
+        self._run_aws(
+            ["delete-object", "--bucket", self._yandex_s3.bucket, "--key", key]
+        )
 
     def delete_prefix(self, prefix: str) -> None:
         # list-objects-v2 caps Contents at 1000 keys per call and signals
@@ -913,7 +832,7 @@ class CliBackend:
             argv = [
                 "list-objects-v2",
                 "--bucket",
-                self._r2.bucket,
+                self._yandex_s3.bucket,
                 "--prefix",
                 prefix,
                 "--output",
@@ -931,28 +850,6 @@ class CliBackend:
                 break
         for object_key in keys:
             self.delete_object(object_key)
-
-    def purge_cache(self, paths: Sequence[str]) -> None:
-        client = self._http_client or httpx.Client(timeout=30.0)
-        try:
-            response = client.post(
-                f"https://api.cloudflare.com/client/v4/zones/"
-                f"{self._cloudflare.zone_id}/purge_cache",
-                headers={
-                    "Authorization": f"Bearer {self._cloudflare.api_token}",
-                    "Content-Type": "application/json",
-                },
-                json={"files": [f"https://routing.akent.site{p}" for p in paths]},
-            )
-        finally:
-            if self._http_client is None:
-                client.close()
-        if response.status_code >= 400:
-            # Deliberately omit the request body/headers from the error --
-            # they were built from the bearer token above.
-            raise PublishError(
-                f"Cloudflare cache purge failed with status {response.status_code}"
-            )
 
     def create_draft_release(self, version: str, archive_path: Path) -> str:
         self._runner.run(

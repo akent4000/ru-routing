@@ -157,7 +157,7 @@ def test_rollback_parses_required_arguments():
 def test_publish_missing_env_credentials_produces_clear_error_no_traceback(
     capsys, monkeypatch, tmp_path
 ):
-    monkeypatch.delenv("R2_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("YANDEX_S3_ACCESS_KEY_ID", raising=False)
     manifest = _manifest("2026.08.26.0000-aaaaaaaa")
     dist = _write_dist(tmp_path, manifest)
     arguments = _Namespace(dist=dist, previous_manifest=None, repo="owner/name")
@@ -167,7 +167,7 @@ def test_publish_missing_env_credentials_produces_clear_error_no_traceback(
     assert exit_code != 0
     error = capsys.readouterr().err
     assert "publish failed" in error
-    assert "R2_ACCOUNT_ID" in error
+    assert "YANDEX_S3_ACCESS_KEY_ID" in error
     assert "Traceback" not in error
 
 

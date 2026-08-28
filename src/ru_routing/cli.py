@@ -6,7 +6,7 @@ Orchestrates the pipeline stages built in Tasks 3-9
 ``release-decision``, ``publish``, and ``rollback`` subcommands.
 ``publish``/``rollback`` wire directly to Task 11's
 ``src/ru_routing/publish.py`` (``publish_release``/``rollback``,
-``CliBackend``, ``R2Credentials``/``CloudflareCredentials``).
+``CliBackend`` and ``YandexS3Credentials``).
 
 Stage ordering for ``build``/``check`` (see the design doc's "Build
 Architecture" section for the seven canonical stages: fetch, normalize,
@@ -89,11 +89,10 @@ from .package import (
 from .parsers import GeodataRule, ParseError, ProtobufGeodataReader
 from .publish import (
     CliBackend,
-    CloudflareCredentials,
     PublishBackend,
     PublishError,
     PublishPlan,
-    R2Credentials,
+    YandexS3Credentials,
     publish_release,
 )
 from .publish import (
@@ -332,7 +331,7 @@ def _add_publish_arguments(command_parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="FILE",
         help=(
-            "manifest.json currently live in R2 (the root /manifest.json), "
+            "manifest.json currently live in object storage (the root /manifest.json), "
             "naming the prior version publication cleanup restores "
             "/latest/* from if this publish fails partway through; omit for "
             "an initial release with nothing previously published"
@@ -1104,8 +1103,8 @@ def _handle_release_decision(arguments: argparse.Namespace) -> int:
 def _default_backend_factory(repo: str) -> PublishBackend:
     """Build the real, production ``CliBackend`` wired to live credentials.
 
-    Reads R2/Cloudflare credentials from the process environment via
-    ``R2Credentials.from_env``/``CloudflareCredentials.from_env`` (raising
+    Reads Yandex S3 credentials from the process environment via
+    ``YandexS3Credentials.from_env`` (raising
     ``PublishError`` naming any missing variable -- never a value -- if one
     is absent). This is the default used by ``_handle_publish``/
     ``_handle_rollback``; tests instead pass a factory returning a
@@ -1114,9 +1113,8 @@ def _default_backend_factory(repo: str) -> PublishBackend:
     testable without the real native toolchain.
     """
 
-    r2 = R2Credentials.from_env(os.environ)
-    cloudflare = CloudflareCredentials.from_env(os.environ)
-    return CliBackend(r2=r2, cloudflare=cloudflare, repo=repo)
+    yandex_s3 = YandexS3Credentials.from_env(os.environ)
+    return CliBackend(yandex_s3=yandex_s3, repo=repo)
 
 
 def _resolve_repo(arguments: argparse.Namespace) -> str:

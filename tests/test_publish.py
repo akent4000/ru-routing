@@ -1,15 +1,14 @@
-"""State-machine tests for R2/GitHub publication and rollback.
+"""State-machine tests for Yandex S3/GitHub publication and rollback.
 
 Exercises ``publish_release``/``rollback`` against an in-memory
 ``FakeBackend`` implementing the ``PublishBackend`` protocol, per the design
 doc's "Publication and CDN" and "Release Integrity and Rollback" sections:
 
-- draft GitHub Release created and assets uploaded before R2 publication;
+- draft GitHub Release created and assets uploaded before Yandex S3 publication;
 - immutable ``/releases/<version>/`` tree uploaded and read-back-verified
   first;
 - ``/latest/*`` objects copied from the just-verified tree second;
 - ``/manifest.json`` written last -- the single atomic pointer flip;
-- Cloudflare cache purge for ``/latest/*`` and ``/manifest.json`` fourth;
 - the GitHub Release is finalized (un-drafted) only after the manifest
   pointer write is verified;
 - any failure before the manifest pointer write triggers cleanup: delete
@@ -35,12 +34,11 @@ import pytest
 from ru_routing.package import Manifest
 from ru_routing.publish import (
     CliBackend,
-    CloudflareCredentials,
     FakeBackend,
     PublishBackend,
     PublishError,
     PublishPlan,
-    R2Credentials,
+    YandexS3Credentials,
     publish_release,
     rollback,
 )
@@ -227,41 +225,37 @@ def test_publish_release_writes_sha256sums_before_manifest(tmp_path):
     assert keys[-1] == "manifest.json"
 
 
-def test_publish_release_purges_cache_for_latest_and_manifest(tmp_path):
-    backend = FakeBackend()
+class _NoPurgeBackend(FakeBackend):
+    """Records a forbidden legacy cache-purge operation if one is attempted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.published_backend_calls: list[str] = []
+
+    def purge_cache(self, paths) -> None:
+        self.published_backend_calls.append("purge")
+
+
+def test_publish_release_never_attempts_a_cache_purge(tmp_path):
+    backend = _NoPurgeBackend()
     plan = _plan(tmp_path, "2026.08.26.0004-eeeeeeee")
 
     publish_release(plan, backend)
 
-    assert backend.purged
-    purged_paths = backend.purged[-1]
-    assert "/manifest.json" in purged_paths
-    assert any(path.startswith("/latest/") for path in purged_paths)
+    assert "purge" not in backend.published_backend_calls
 
 
-def test_publish_release_purge_happens_after_manifest_write(tmp_path):
-    backend = FakeBackend()
-    plan = _plan(tmp_path, "2026.08.26.0005-ffffffff")
-
-    publish_release(plan, backend)
-
-    manifest_put_tick = max(
-        tick for tick, key in backend.put_log if key == "manifest.json"
-    )
-    assert backend.purge_index > manifest_put_tick
-
-
-def test_publish_release_creates_draft_before_r2_upload(tmp_path):
+def test_publish_release_creates_draft_before_s3_upload(tmp_path):
     backend = FakeBackend()
     plan = _plan(tmp_path, "2026.08.26.0006-11111111")
 
     publish_release(plan, backend)
 
     assert backend.draft_created_index is not None
-    first_r2_put_tick = min(
+    first_s3_put_tick = min(
         tick for tick, key in backend.put_log if key.startswith("releases/")
     )
-    assert backend.draft_created_index < first_r2_put_tick
+    assert backend.draft_created_index < first_s3_put_tick
 
 
 def test_publish_release_finalizes_draft_after_manifest_pointer_verified(tmp_path):
@@ -451,38 +445,17 @@ def test_sha256sums_failure_leaves_manifest_pointer_at_prior_version(tmp_path):
     assert backend.get_object("latest/sing-box/lite/example.json") == b"prior-singbox"
 
 
-# --- Failure/cleanup: cache purge ---------------------------------------
+# --- Failure: GitHub Release finalization after Yandex S3 publication ---
 
 
-def test_purge_failure_does_not_roll_back_manifest_pointer(tmp_path):
-    # Per the design doc, purge is step 4, after the atomic pointer flip
-    # (step 3) already succeeded. A purge failure must NOT undo the
-    # manifest write or delete the release/draft -- the release is already
-    # live; only the CDN cache may be stale until purge is retried.
-    backend = FakeBackend()
-    plan = _plan(tmp_path, "2026.08.26.0500-aaaaaaab")
-    backend.fail_purge = True
-
-    with pytest.raises(PublishError):
-        publish_release(plan, backend)
-
-    manifest_payload = json.loads(backend.get_object("manifest.json"))
-    assert manifest_payload["latest_version"] == "2026.08.26.0500-aaaaaaab"
-    assert backend.deleted_release_id is None
-    assert backend.finalized_release_id == backend.created_release_id
-
-
-# --- Failure: GitHub Release finalization after R2 already published ----
-
-
-def test_finalize_failure_after_r2_publication_leaves_r2_state_intact(tmp_path):
-    # If R2 publication (steps 1-3) has already succeeded when finalization
-    # fails, R2 is already live and correctly serving the new version.
-    # publish_release must raise PublishError but must NOT roll back R2
+def test_finalize_failure_after_s3_publication_leaves_s3_state_intact(tmp_path):
+    # If S3 publication (steps 1-3) has already succeeded when finalization
+    # fails, S3 is already live and correctly serving the new version.
+    # publish_release must raise PublishError but must NOT roll back S3
     # state, and must NOT delete the draft release -- deleting it would
-    # orphan the already-correct R2 state with no discoverable GitHub
+    # orphan the already-correct S3 state with no discoverable GitHub
     # Release at all. See the design doc's "Publication and CDN" section:
-    # it only prescribes deleting the draft when R2 publication itself
+    # it only prescribes deleting the draft when S3 publication itself
     # fails (before the pointer flip); it is silent on a later finalization
     # failure, so this test documents the chosen interpretation.
     backend = FakeBackend()
@@ -493,7 +466,7 @@ def test_finalize_failure_after_r2_publication_leaves_r2_state_intact(tmp_path):
     with pytest.raises(PublishError, match="finalization failed"):
         publish_release(plan, backend)
 
-    # R2 state (manifest pointer, /latest/*, /releases/<version>/) is left
+    # S3 state (manifest pointer, /latest/*, /releases/<version>/) is left
     # exactly as the successful publication produced it -- not rolled back.
     manifest_payload = json.loads(backend.get_object("manifest.json"))
     assert manifest_payload["latest_version"] == "2026.08.26.0420-99999997"
@@ -533,12 +506,12 @@ def test_no_credentials_leak_into_publish_error_messages(tmp_path):
     backend = FakeBackend()
     plan = _plan(tmp_path, "2026.08.26.0700-cccccccd")
     backend.fail_put_key = "releases/2026.08.26.0700-cccccccd/xray/geoip.dat"
-    backend.secret_marker = "SUPER-SECRET-R2-KEY"
+    backend.secret_marker = "SUPER-SECRET-S3-KEY"
 
     with pytest.raises(PublishError) as excinfo:
         publish_release(plan, backend)
 
-    assert "SUPER-SECRET-R2-KEY" not in str(excinfo.value)
+    assert "SUPER-SECRET-S3-KEY" not in str(excinfo.value)
 
 
 # --- Rollback -------------------------------------------------------------
@@ -621,7 +594,7 @@ def test_rollback_never_rebuilds_release_only_copies_and_points(tmp_path):
     assert before_release_puts == after_release_puts
 
 
-def test_rollback_installs_complete_target_root_state_and_purges_paths():
+def test_rollback_installs_complete_target_root_state_without_cache_purge():
     backend = FakeBackend()
     current = replace(
         _manifest("2026.08.20.0000-current0"),
@@ -677,15 +650,6 @@ def test_rollback_installs_complete_target_root_state_and_purges_paths():
     assert sums_index < max(
         i for i, key in enumerate(put_keys) if key == "manifest.json"
     )
-    assert backend.purged == [
-        tuple(
-            sorted(
-                {"/manifest.json", "/SHA256SUMS"}
-                | {f"/latest/{relative}" for relative in target.checksums}
-            )
-        )
-    ]
-    assert backend.purge_index > backend.put_log[-1][0]
 
 
 def test_rollback_rejects_tampered_immutable_target_before_writing_latest():
@@ -731,7 +695,6 @@ def test_rollback_verifies_each_latest_copy_before_writing_root_metadata():
 
     assert "SHA256SUMS" not in backend.objects
     assert "manifest.json" not in backend.objects
-    assert backend.purged == []
 
 
 def test_rollback_rejects_inconsistent_target_sha256sums_before_copying():
@@ -745,7 +708,6 @@ def test_rollback_rejects_inconsistent_target_sha256sums_before_copying():
         rollback(target.release_version, backend, target_manifest=target)
 
     assert backend.put_log == []
-    assert backend.purged == []
 
 
 def test_rollback_rejects_incomplete_archive_internal_manifest():
@@ -761,7 +723,6 @@ def test_rollback_rejects_incomplete_archive_internal_manifest():
         rollback(target.release_version, backend, target_manifest=target)
 
     assert backend.put_log == []
-    assert backend.purged == []
 
 
 def test_rollback_rejects_version_that_does_not_match_target_manifest():
@@ -778,10 +739,10 @@ def test_publish_backend_protocol_is_satisfied_by_fake_backend():
     assert isinstance(FakeBackend(), PublishBackend)
 
 
-# --- Failure/cleanup: create_draft_release fails before any R2 write -----
+# --- Failure/cleanup: create_draft_release fails before any S3 write -----
 
 
-def test_create_release_failure_raises_and_attempts_no_r2_writes(tmp_path):
+def test_create_release_failure_raises_and_attempts_no_s3_writes(tmp_path):
     backend = FakeBackend()
     plan = _plan(tmp_path, "2026.08.26.0800-dddddddd")
     backend.fail_create_release = True
@@ -816,32 +777,41 @@ def test_create_release_failure_cleanup_does_not_crash_on_missing_release_id(
 # --- Credential repr/str redaction ----------------------------------------
 
 
-def test_r2_credentials_repr_redacts_secrets():
-    creds = R2Credentials(
-        account_id="acct-123",
+def test_yandex_s3_credentials_from_env_fix_endpoint_and_redact_secrets():
+    creds = YandexS3Credentials.from_env(
+        {
+            "YANDEX_S3_ACCESS_KEY_ID": "AKIA-SUPER-SECRET-ID",
+            "YANDEX_S3_SECRET_ACCESS_KEY": "SUPER-SECRET-KEY-VALUE",
+            "UNRELATED_SETTING": "irrelevant",
+        }
+    )
+
+    text = repr(creds)
+
+    assert creds.bucket == "routing.akent.site"
+    assert creds.endpoint_url == "https://storage.yandexcloud.net"
+    assert "AKIA-SUPER-SECRET-ID" not in text
+    assert "SUPER-SECRET-KEY-VALUE" not in text
+    assert "YANDEX_S3_SECRET_ACCESS_KEY" not in text
+    assert str(creds) == text
+
+
+def test_yandex_s3_credentials_reject_missing_yandex_secret_by_name():
+    with pytest.raises(PublishError, match="YANDEX_S3_SECRET_ACCESS_KEY"):
+        YandexS3Credentials.from_env({"YANDEX_S3_ACCESS_KEY_ID": "key"})
+
+
+def test_yandex_s3_credentials_repr_redacts_secrets():
+    creds = YandexS3Credentials(
         access_key_id="AKIA-SUPER-SECRET-ID",
         secret_access_key="SUPER-SECRET-KEY-VALUE",
-        bucket="routing-bucket",
-        endpoint_url="https://example.r2.cloudflarestorage.com",
     )
 
     text = repr(creds)
 
     assert "AKIA-SUPER-SECRET-ID" not in text
     assert "SUPER-SECRET-KEY-VALUE" not in text
-    assert "routing-bucket" in text
-    assert str(creds) == text
-
-
-def test_cloudflare_credentials_repr_redacts_secrets():
-    creds = CloudflareCredentials(
-        zone_id="zone-123", api_token="CF-SUPER-SECRET-TOKEN"
-    )
-
-    text = repr(creds)
-
-    assert "CF-SUPER-SECRET-TOKEN" not in text
-    assert "zone-123" in text
+    assert "routing.akent.site" in text
     assert str(creds) == text
 
 
@@ -857,14 +827,10 @@ class _FakeAwsProcess:
 
 def _make_cli_backend(aws_subprocess_runner, tmp_path):
     return CliBackend(
-        r2=R2Credentials(
-            account_id="acct",
+        yandex_s3=YandexS3Credentials(
             access_key_id="key",
             secret_access_key="secret",
-            bucket="bucket",
-            endpoint_url="https://example.r2.cloudflarestorage.com",
         ),
-        cloudflare=CloudflareCredentials(zone_id="zone", api_token="token"),
         repo="owner/repo",
         workdir=tmp_path,
         aws_subprocess_runner=aws_subprocess_runner,
@@ -957,3 +923,26 @@ def test_cli_backend_delete_prefix_empty_listing_deletes_nothing(tmp_path):
     backend.delete_prefix("releases/v1/")
 
     assert all("delete-object" not in c for c in calls)
+
+
+def test_cli_backend_passes_yandex_credentials_in_environment_not_argv(tmp_path):
+    calls: list[list[str]] = []
+    environments: list[dict[str, str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        environments.append(kwargs["env"])
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+    backend.delete_object("latest/xray/geoip.dat")
+
+    command = calls[0]
+    assert command[command.index("--endpoint-url") + 1] == (
+        "https://storage.yandexcloud.net"
+    )
+    assert "key" not in command
+    assert "secret" not in command
+    assert environments[0]["AWS_ACCESS_KEY_ID"] == "key"
+    assert environments[0]["AWS_SECRET_ACCESS_KEY"] == "secret"
+    assert environments[0]["AWS_DEFAULT_REGION"] == "ru-central1"
