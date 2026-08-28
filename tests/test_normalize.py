@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from ru_routing.config import (
 from ru_routing.fetch import FetchedSource
 from ru_routing.models import RuleEntry, RuleKind
 from ru_routing.normalize import (
+    GO_RE2_VALIDATOR,
     TARGET_COMPATIBILITY,
     GoRegexValidator,
     NormalizationError,
@@ -158,6 +160,22 @@ def test_normalize_rule_fails_explicitly_when_the_go_validator_is_unavailable():
         normalize_rule(
             raw_rule(RuleKind.DOMAIN_REGEX, "example"), regex_validator=validator
         )
+
+
+@pytest.mark.skipif(shutil.which("go") is None, reason="go toolchain not installed")
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"^r+[0-9]+(---|\.)sn-(2x3|ni5|j5o)\w{5}\.googlevideo\.com$",
+        r"^chatgpt-async-webps-prod-\S+-\d+\.webpubsub\.azure\.com$",
+    ],
+)
+def test_default_go_regex_validator_accepts_valid_re2_syntax(pattern):
+    """The real ``go run ... -- <pattern>`` invocation must not reject every
+    pattern: live geosite regex rules use plain RE2-compatible syntax and
+    must not be universally rejected by a broken validator invocation."""
+
+    GO_RE2_VALIDATOR.validate(pattern)
 
 
 def test_normalize_sources_resolves_fetched_binary_source_through_the_registry(

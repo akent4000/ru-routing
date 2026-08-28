@@ -39,7 +39,7 @@ class GoRegexValidator:
     """Validate regexes with Go regexp.Compile, which implements RE2 syntax."""
 
     command: tuple[str, ...] = field(
-        default_factory=lambda: ("go", "run", str(_RE2CHECK), "--")
+        default_factory=lambda: ("go", "run", str(_RE2CHECK))
     )
     timeout_seconds: float = 10.0
 
