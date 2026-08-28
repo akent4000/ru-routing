@@ -254,3 +254,28 @@ def test_help_documents_read_only_check() -> None:
     assert completed.returncode == 0
     assert "--check" in completed.stdout
     assert "read-only" in completed.stdout.lower()
+
+
+def test_readme_documents_yandex_runtime_contract() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Yandex Object Storage" in readme
+    assert "routing.akent.site" in readme
+    assert "storage.editor" in readme
+    assert "YANDEX_S3_ACCESS_KEY_ID" in readme
+    assert "YANDEX_S3_SECRET_ACCESS_KEY" in readme
+    assert "https://storage.yandexcloud.net" in readme
+    assert "404" in readme
+
+    for obsolete in (
+        "Cloudflare",
+        "R2_ACCOUNT_ID",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET",
+        "R2_ENDPOINT_URL",
+        "CLOUDFLARE_ZONE_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "bootstrap-cloudflare.sh",
+    ):
+        assert obsolete not in readme

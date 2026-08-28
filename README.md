@@ -189,79 +189,46 @@ sequence. A manual run is:
 gh workflow run update.yml --repo "$GITHUB_REPOSITORY"
 ```
 
-## Cloudflare R2 and GitHub bootstrap
+## Yandex Object Storage and GitHub bootstrap
 
-The bootstrap is safe by default: `--check` only reads state. `--apply` is the
-explicit mutation boundary and reconciles only the resources managed by this
-project. It never deletes a bucket, custom domain, cache rule, GitHub
-environment, secret, or variable. Existing GitHub secrets are not overwritten;
-rotate them explicitly with `gh secret set`.
+Publication targets Yandex Object Storage at the public bucket/domain
+`routing.akent.site`, served over the S3 endpoint
+`https://storage.yandexcloud.net`. Bucket creation, DNS, static-website
+hosting/public access, and the custom-domain TLS certificate are user-owned
+prerequisites; this project does not automate them.
+
+`scripts/bootstrap-yandex-storage.sh --check` is read-only: it verifies the
+custom-domain manifest probe (`200` with a valid JSON object, or `404` for the
+valid first-release state — every other response is blocking), confirms the
+service account can reach the bucket via `aws s3api head-bucket`, and confirms
+the GitHub `production` environment carries both runtime secrets. It never
+creates or mutates the bucket, DNS, hosting, public access, or certificate.
 
 Prerequisites:
 
-1. Create a short-lived Cloudflare bootstrap token limited to the target
-   account and zone with `Account / Workers R2 Storage Write` and
-   `Zone / Cache Rules Edit`. Revoke it after setup.
-2. Create R2 S3 credentials with `Object Read & Write` limited to the one
-   publication bucket. Record the access-key ID and secret once; Cloudflare
-   cannot show the secret again.
-3. Create a separate runtime Cloudflare token with only
-   `Zone / Cache Purge` for the target zone. This is the token the release
-   workflow retains.
-4. Authenticate `gh` as a repository administrator. The identity must be able
-   to create the `production` environment and manage its Actions secrets and
-   variables.
-
-Cloudflare documents the
-[R2 token model](https://developers.cloudflare.com/r2/api/tokens/),
-[custom-domain API](https://developers.cloudflare.com/api/resources/r2/subresources/buckets/subresources/domains/subresources/custom/methods/create/),
-and [Cache Rules](https://developers.cloudflare.com/cache/how-to/cache-rules/).
-
-Export identifiers plus the one-time bootstrap token. The R2 credentials and
-runtime purge token can be exported as shown or entered at masked prompts on an
-interactive `--apply` run.
+1. Create (or reuse) a Yandex Cloud service account scoped to
+   `storage.editor` on the `routing.akent.site` bucket only.
+2. Create a static access key pair for that service account. Record the
+   access-key ID and secret once.
+3. Store the pair as the GitHub `production` environment secrets
+   `YANDEX_S3_ACCESS_KEY_ID` and `YANDEX_S3_SECRET_ACCESS_KEY`. Existing
+   secrets are not overwritten by this script; rotate them explicitly with
+   `gh secret set`.
+4. Authenticate `gh` as a repository administrator so `--check` can inspect
+   the `production` environment and its secrets.
 
 ```bash
-export CLOUDFLARE_API_TOKEN='<one-time-bootstrap-token>'
-export CLOUDFLARE_ACCOUNT_ID='<account-id>'
-export CLOUDFLARE_ZONE_ID='<zone-id>'
-export R2_BUCKET='<bucket-name>'
 export GITHUB_REPOSITORY='<owner>/<repository>'
+export YANDEX_S3_ACCESS_KEY_ID='<yandex-s3-access-key-id>'
+export YANDEX_S3_SECRET_ACCESS_KEY='<yandex-s3-secret-access-key>'
 
-export R2_ACCESS_KEY_ID='<r2-access-key-id>'
-export R2_SECRET_ACCESS_KEY='<r2-secret-access-key>'
-export CLOUDFLARE_CACHE_PURGE_TOKEN='<runtime-cache-purge-token>'
-
-scripts/bootstrap-cloudflare.sh --permissions
-scripts/bootstrap-cloudflare.sh --check
-scripts/bootstrap-cloudflare.sh --apply
-scripts/bootstrap-cloudflare.sh --check
+scripts/bootstrap-yandex-storage.sh --permissions
+scripts/bootstrap-yandex-storage.sh --check
 ```
 
-The script creates/verifies the R2 bucket at the account-scoped Cloudflare API
-boundary, attaches `routing.akent.site`, verifies active ownership and TLS,
-and manages two cache rules at the zone boundary:
-
-- `/releases/*`: cache eligible, one-year edge/browser TTL;
-- `/latest/*`, `/manifest.json`, and `/SHA256SUMS`: cache eligible,
-  five-minute edge/browser TTL.
-
-It then creates/verifies the GitHub `production` environment. The workflow
-contract is:
-
-| Kind | Name | Value/source |
-| --- | --- | --- |
-| Secret | `R2_ACCOUNT_ID` | the Cloudflare account ID; kept out of workflow-wide logs |
-| Secret | `R2_ACCESS_KEY_ID` | bucket-scoped R2 S3 access-key ID |
-| Secret | `R2_SECRET_ACCESS_KEY` | bucket-scoped R2 S3 secret |
-| Secret | `CLOUDFLARE_API_TOKEN` | runtime Cache Purge token, not the bootstrap token |
-| Variable | `R2_BUCKET` | publication bucket name |
-| Variable | `R2_ENDPOINT_URL` | defaults to `https://<account-id>.r2.cloudflarestorage.com` |
-| Variable | `CLOUDFLARE_ZONE_ID` | zone containing the custom domain |
-
-`GITHUB_REPOSITORY` and the workflow's scoped `github.token` are provided by
-GitHub Actions. The publisher intentionally uses `R2_ACCOUNT_ID`; it does not
-need a separate `CLOUDFLARE_ACCOUNT_ID` input.
+The release workflow forwards only `YANDEX_S3_ACCESS_KEY_ID` and
+`YANDEX_S3_SECRET_ACCESS_KEY` into the publish container; `GITHUB_REPOSITORY`
+and the workflow's scoped `github.token` are provided by GitHub Actions.
 
 After bootstrap, configure any required reviewers, protected deployment
 branches/tags, and wait timers for the `production` environment in repository
@@ -271,7 +238,7 @@ Settings. The script does not guess an organization's approval policy.
 
 The scheduled workflow builds first and publishes only when the packaged
 manifest contains a new release version. An unchanged run never invokes the
-publisher and performs no R2 mutation.
+publisher and performs no Yandex Object Storage mutation.
 
 A changed release is published in this order:
 
@@ -280,22 +247,23 @@ A changed release is published in this order:
 3. copy those bytes to `/latest/*`;
 4. write root `SHA256SUMS`, then write `/manifest.json` last as the atomic
    pointer switch;
-5. finalize the GitHub Release and purge the short-lived cache paths.
+5. finalize the GitHub Release.
+
+Object cache headers are set per-object at upload time; there is no
+post-pointer CDN cache purge step.
 
 Recovery depends on where failure occurred:
 
 - Fetch, build, validation, or license/freshness failure: the previous public
   release is untouched.
-- R2 failure before the manifest switch: the draft and new immutable tree are
-  removed and `/latest/*` is restored from the previous manifest. If cleanup
-  itself reports a problem, trust only the unchanged manifest-pinned version;
-  inspect any orphan path before removing it manually.
-- GitHub finalization failure after the pointer switch: R2 is already live and
-  the draft is deliberately retained. Investigate, then retry with
+- Yandex Object Storage failure before the manifest switch: the draft and new
+  immutable tree are removed and `/latest/*` is restored from the previous
+  manifest. If cleanup itself reports a problem, trust only the unchanged
+  manifest-pinned version; inspect any orphan path before removing it
+  manually.
+- GitHub finalization failure after the pointer switch: the release is already
+  live and the draft is deliberately retained. Investigate, then retry with
   `gh release edit <version> --draft=false --repo "$GITHUB_REPOSITORY"`.
-- Cache purge failure: the release and manifest pointer are already live. Do
-  not republish; retry purging `/manifest.json` and the affected `/latest/*`
-  URLs through Cloudflare, then run the bootstrap check.
 
 ## Temporary development/testing freshness policy
 
@@ -316,9 +284,7 @@ curl -fsSL "https://routing.akent.site/releases/$VERSION/manifest.json" \
   > output/rollback/target-manifest.json
 
 docker compose run --rm \
-  -e R2_ACCOUNT_ID -e R2_ACCESS_KEY_ID -e R2_SECRET_ACCESS_KEY \
-  -e R2_BUCKET -e R2_ENDPOINT_URL \
-  -e CLOUDFLARE_ZONE_ID -e CLOUDFLARE_API_TOKEN \
+  -e YANDEX_S3_ACCESS_KEY_ID -e YANDEX_S3_SECRET_ACCESS_KEY \
   -e GITHUB_REPOSITORY \
   builder rollback \
   --version "$VERSION" \
@@ -329,11 +295,10 @@ docker compose run --rm \
 The command requires the manifest's `release_version` to match `VERSION`,
 verifies every chosen `/releases/<version>/` object against that manifest,
 copies the objects to `/latest/*`, replaces root `SHA256SUMS`, and writes the
-complete target manifest with `latest_version` last. It then purges all changed
-pointer/alias paths. Confirm the target fingerprints and checksums after
-completion. Keep a backup copy of the published
-`/releases/<version>/manifest.json` alongside any release archive you retain
-for manual recovery.
+complete target manifest with `latest_version` last. Confirm the target
+fingerprints and checksums after completion. Keep a backup copy of the
+published `/releases/<version>/manifest.json` alongside any release archive
+you retain for manual recovery.
 
 ## Attribution and bad routes
 
