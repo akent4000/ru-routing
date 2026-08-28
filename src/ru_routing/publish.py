@@ -734,10 +734,15 @@ class CliBackend:
 
     def _aws_env(self) -> dict[str, str]:
         return {
-            **os.environ,
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("AWS_")
+            },
             "AWS_ACCESS_KEY_ID": self._yandex_s3.access_key_id,
             "AWS_SECRET_ACCESS_KEY": self._yandex_s3.secret_access_key,
             "AWS_DEFAULT_REGION": "ru-central1",
+            "AWS_REGION": "ru-central1",
         }
 
     def _run_aws(self, argv: Sequence[str]) -> str:

@@ -946,3 +946,35 @@ def test_cli_backend_passes_yandex_credentials_in_environment_not_argv(tmp_path)
     assert environments[0]["AWS_ACCESS_KEY_ID"] == "key"
     assert environments[0]["AWS_SECRET_ACCESS_KEY"] == "secret"
     assert environments[0]["AWS_DEFAULT_REGION"] == "ru-central1"
+
+
+def test_cli_backend_discards_conflicting_ambient_aws_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session-token")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret-key")
+    monkeypatch.setenv("AWS_PROFILE", "ambient-profile")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/tmp/ambient-credentials")
+    monkeypatch.setenv("SAFE_NON_AWS_SETTING", "retained")
+    environments: list[dict[str, str]] = []
+
+    def fake_runner(command, **kwargs):
+        environments.append(kwargs["env"])
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+    backend.delete_object("latest/xray/geoip.dat")
+
+    environment = environments[0]
+    assert environment["SAFE_NON_AWS_SETTING"] == "retained"
+    assert environment["AWS_ACCESS_KEY_ID"] == "key"
+    assert environment["AWS_SECRET_ACCESS_KEY"] == "secret"
+    assert environment["AWS_DEFAULT_REGION"] == "ru-central1"
+    assert environment["AWS_REGION"] == "ru-central1"
+    assert "AWS_SESSION_TOKEN" not in environment
+    assert {key for key in environment if key.startswith("AWS_")} == {
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_DEFAULT_REGION",
+        "AWS_REGION",
+    }
