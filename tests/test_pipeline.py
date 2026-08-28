@@ -804,3 +804,68 @@ def test_build_inputs_rejects_paths_outside_fetch_objects_tree(tmp_path, capsys)
     assert "outside" in error or "unsafe" in error
     assert "runetfreedom/russia-v2ray-rules-dat" in error
     assert not dist.exists()
+
+
+def test_build_manifest_records_native_tool_versions(tmp_path):
+    """Spec line 151: manifest.json must define "compatibility/tool
+    versions". BuildMetadata.tool_versions exists for exactly this, but the
+    CLI's build path never populates it, so every produced manifest.json
+    carries ``"tool_versions": {}`` -- an unauditable release. The CLI must
+    query the actual native tools it ran (or the fake executor's declared
+    stand-ins under --fake-native-tools) and record them.
+    """
+
+    dist = tmp_path / "dist"
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+    assert exit_code == 0
+    manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+    tool_versions = manifest["tool_versions"]
+    assert isinstance(tool_versions, dict) and tool_versions, (
+        "manifest.json must carry non-empty tool_versions"
+    )
+    for tool in ("dlc", "geoip", "sing-box", "mihomo", "xray"):
+        assert tool in tool_versions, f"missing version for {tool}"
+        assert tool_versions[tool]
+
+
+def test_build_manifest_reports_representation_losses(tmp_path):
+    """Spec line 65: entries a target format cannot represent "are reported
+    in the manifest". render.representation_report computes exactly that,
+    and high-precedence losses already fail the build, but the report is
+    discarded: the manifest has no representation-loss field at all, so
+    non-blocking losses are silently dropped instead of reported.
+    """
+
+    dist = tmp_path / "dist"
+    exit_code = main(
+        [
+            "build",
+            "--fixtures",
+            str(FIXTURES_DIR),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+    assert exit_code == 0
+    manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+    assert "representation_losses" in manifest, (
+        "manifest.json must report per-target representation losses"
+    )
+    losses = manifest["representation_losses"]
+    assert isinstance(losses, list)
+    for entry in losses:
+        assert {"target", "dataset", "category", "kind", "value"} <= set(entry)

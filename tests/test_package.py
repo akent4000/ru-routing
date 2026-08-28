@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import ru_routing.package as package_module
 from ru_routing.config import LicenseMetadata, ThresholdPolicy, load_thresholds
 from ru_routing.fetch import FetchedSource
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
@@ -21,6 +22,7 @@ from ru_routing.package import (
     plan_release,
     policy_fingerprint,
 )
+from ru_routing.render import Representation, RepresentationReport
 from ru_routing.resolve import ConflictReport, ResolvedBuild
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -489,6 +491,40 @@ def test_package_build_manifest_contains_required_fields(tmp_path):
     assert manifest.artifact_sizes
     assert manifest.checksums
     assert manifest.tool_versions == {"xray": "1.0.0"}
+
+
+def test_package_build_preserves_representation_losses_after_archive_rewrite(
+    tmp_path, monkeypatch
+):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    loss = Representation(
+        target="future-engine",
+        dataset="server",
+        category="thematic",
+        kind=RuleKind.DOMAIN_REGEX,
+        value="^unrepresentable\\.example$",
+        represented=False,
+        reason="rule kind is unsupported",
+    )
+    monkeypatch.setattr(
+        package_module,
+        "representation_report",
+        lambda _build: RepresentationReport((loss,)),
+    )
+
+    package_build(dist, _metadata())
+
+    manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["representation_losses"] == [
+        {
+            "target": "future-engine",
+            "dataset": "server",
+            "category": "thematic",
+            "kind": "domain_regex",
+            "value": "^unrepresentable\\.example$",
+        }
+    ]
 
 
 def test_package_build_records_source_provenance_license_and_freshness(tmp_path):

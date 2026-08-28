@@ -793,6 +793,14 @@ class _FakeToolExecutor:
     toolchain this sandboxed environment does not have.
     """
 
+    tool_versions = {
+        "dlc": "fake-dlc",
+        "geoip": "fake-geoip",
+        "sing-box": "fake-sing-box",
+        "mihomo": "fake-mihomo",
+        "xray": "fake-xray",
+    }
+
     def run(self, argv: Sequence[str], cwd: Path) -> CompletedTool:
         command = tuple(argv)
         working_directory = Path(cwd)
@@ -967,6 +975,7 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
             check_determinism=not getattr(arguments, "fake_native_tools", False)
         )
         validate_build(resolved, dist, thresholds, tools)
+        tool_versions = tools.tool_versions(dist)
 
         built_at = _built_at(arguments)
         previous_manifest = _previous_manifest(arguments)
@@ -978,6 +987,7 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
             thresholds=threshold_policy,
             previous_manifest=previous_manifest,
             built_at=built_at,
+            tool_versions=tool_versions,
         )
         decision = plan_release(metadata_for_version)
         templates_dir = getattr(arguments, "templates_dir", None) or (
@@ -998,6 +1008,7 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
             thresholds=threshold_policy,
             previous_manifest=previous_manifest,
             built_at=built_at,
+            tool_versions=tool_versions,
         )
         package_build(dist, metadata)
     except (

@@ -34,6 +34,7 @@ from typing import Mapping
 
 from .config import SourceRemovalMigration, ThresholdPolicy
 from .fetch import FetchedSource
+from .render import representation_report
 from .resolve import ConflictReport, ResolvedBuild
 
 SCHEMA_VERSION = "1"
@@ -112,12 +113,18 @@ class Manifest:
     tool_versions: Mapping[str, str]
     conflict_statistics: Mapping[str, int]
     built_at: str
+    representation_losses: tuple[Mapping[str, str], ...] = ()
     archive_filename: str | None = None
     archive_sha256: str | None = None
     archive_size_bytes: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", tuple(self.sources))
+        object.__setattr__(
+            self,
+            "representation_losses",
+            tuple(dict(loss) for loss in self.representation_losses),
+        )
         object.__setattr__(
             self, "category_counts", MappingProxyType(dict(self.category_counts))
         )
@@ -150,6 +157,9 @@ class Manifest:
             "sha256sums_sha256": self.sha256sums_sha256,
             "tool_versions": dict(sorted(self.tool_versions.items())),
             "conflict_statistics": dict(sorted(self.conflict_statistics.items())),
+            "representation_losses": [
+                dict(loss) for loss in self.representation_losses
+            ],
             "built_at": self.built_at,
             "archive_filename": self.archive_filename,
             "archive_sha256": self.archive_sha256,
@@ -187,6 +197,7 @@ class Manifest:
             tool_versions=dict(data["tool_versions"]),
             conflict_statistics=dict(data["conflict_statistics"]),
             built_at=data["built_at"],
+            representation_losses=tuple(data.get("representation_losses", ())),
             archive_filename=data.get("archive_filename"),
             archive_sha256=data.get("archive_sha256"),
             archive_size_bytes=data.get("archive_size_bytes"),
@@ -464,6 +475,7 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
         tool_versions=dict(metadata.tool_versions),
         conflict_statistics=_conflict_statistics(metadata.conflicts),
         built_at=metadata.built_at,
+        representation_losses=_representation_loss_documents(metadata.build),
     )
 
     manifest_path = destination / "manifest.json"
@@ -484,6 +496,21 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
     )
     _write_manifest_json(manifest_path, manifest)
     return manifest
+
+
+def _representation_loss_documents(build: ResolvedBuild) -> tuple[dict[str, str], ...]:
+    """Serialize non-blocking target-format losses for manifest auditing."""
+
+    return tuple(
+        {
+            "target": loss.target,
+            "dataset": loss.dataset,
+            "category": loss.category,
+            "kind": loss.kind.value,
+            "value": loss.value,
+        }
+        for loss in representation_report(build).losses
+    )
 
 
 def _install_license_material(destination: Path) -> None:
@@ -524,6 +551,7 @@ def _manifest_kwargs(manifest: Manifest) -> dict[str, object]:
         "tool_versions": manifest.tool_versions,
         "conflict_statistics": manifest.conflict_statistics,
         "built_at": manifest.built_at,
+        "representation_losses": manifest.representation_losses,
     }
 
 

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 import shutil
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -52,6 +53,80 @@ class NativeTools:
                 continue
             if not getattr(self, field_.name):
                 raise ValueError(f"{field_.name} executable must not be empty")
+
+    def tool_versions(self, cwd: Path) -> dict[str, str]:
+        """Return auditable identities for the native tools used by a build.
+
+        The two Go compilers built from source do not implement a version
+        command, so their executable SHA-256 is the only reliable identity.
+        The released engines expose stable version commands.  Test runners
+        can declare deterministic stand-in versions without pretending to be
+        executables on ``PATH``.
+        """
+
+        declared = getattr(self.runner, "tool_versions", None)
+        if declared is not None:
+            return _declared_tool_versions(declared)
+
+        names = {
+            "dlc": self.dlc,
+            "geoip": self.geoip,
+            "sing-box": self.sing_box,
+            "mihomo": self.mihomo,
+            "xray": self.xray,
+        }
+        version_commands = {
+            "sing-box": (self.sing_box, "version"),
+            "mihomo": (self.mihomo, "-v"),
+            "xray": (self.xray, "version"),
+        }
+        versions: dict[str, str] = {}
+        for name, executable in names.items():
+            command = version_commands.get(name)
+            if command is not None:
+                try:
+                    completed = self.runner.run(command, cwd)
+                except ToolError:
+                    # The pinned source-built tools have no version command;
+                    # fall back to their binary digest below if an engine
+                    # implementation similarly omits one.
+                    pass
+                else:
+                    output = (completed.stdout or completed.stderr).strip()
+                    if output:
+                        versions[name] = output
+                        continue
+            versions[name] = _executable_sha256(executable)
+        return versions
+
+
+def _declared_tool_versions(versions: Mapping[str, str]) -> dict[str, str]:
+    required = ("dlc", "geoip", "sing-box", "mihomo", "xray")
+    result = {name: versions[name] for name in required if versions.get(name)}
+    missing = sorted(set(required) - set(result))
+    if missing:
+        raise GenerationError(
+            "native tool version declarations are missing: " + ", ".join(missing)
+        )
+    return result
+
+
+def _executable_sha256(executable: str) -> str:
+    path = Path(executable)
+    if not path.is_file():
+        resolved = shutil.which(executable)
+        if resolved is None:
+            raise GenerationError(
+                f"cannot record version for native tool {executable!r}: not on PATH"
+            )
+        path = Path(resolved)
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise GenerationError(
+            f"cannot record version for native tool {executable!r}: {error}"
+        ) from error
+    return f"sha256:{digest}"
 
 
 @dataclass(frozen=True)
