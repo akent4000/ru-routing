@@ -16,6 +16,7 @@ ru-routing = "ru_routing.cli:run"
 ru_routing = [
   "license_material/LICENSES.md",
   "license_material/upstream/*/LICENSE",
+  "tools/re2check/main.go",
 ]
 
 [tool.pytest.ini_options]

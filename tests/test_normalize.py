@@ -178,6 +178,20 @@ def test_default_go_regex_validator_accepts_valid_re2_syntax(pattern):
     GO_RE2_VALIDATOR.validate(pattern)
 
 
+def test_default_go_regex_validator_command_points_at_a_real_file():
+    """The default command's script path must exist on disk.
+
+    A ``__file__``-relative guess that only holds for an editable source
+    checkout (and silently resolves to a missing path once the package is
+    ``pip install``-ed, e.g. into a Docker image's site-packages) would make
+    ``go run`` fail for every pattern -- valid or not -- with no signal
+    other than every regex being universally rejected.
+    """
+
+    script = Path(GO_RE2_VALIDATOR.command[-1])
+    assert script.is_file(), f"{script} does not exist"
+
+
 def test_normalize_sources_resolves_fetched_binary_source_through_the_registry(
     tmp_path,
 ):

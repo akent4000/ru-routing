@@ -6,8 +6,9 @@
 #
 #   - the base Python image, by content digest (not just a tag);
 #   - the Go toolchain, by tag (used both to build DLC/geoip from source and
-#     to run tools/re2check -- the exact RE2 regex validator normalize.py
-#     shells out to via `go run`, see GoRegexValidator);
+#     to run the installed package's ru_routing/tools/re2check/main.go --
+#     the exact RE2 regex validator normalize.py shells out to via `go run`,
+#     see GoRegexValidator);
 #   - v2fly/domain-list-community ("dlc") and v2fly/geoip, built from source
 #     at pinned upstream commit SHAs (build args, overridable but default to
 #     the reviewed values below);
@@ -123,8 +124,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Go itself stays in the final image: normalize.py's GoRegexValidator
-# shells out to `go run tools/re2check/main.go` at build/validate time, not
-# just at image-build time (see src/ru_routing/normalize.py).
+# shells out to `go run <installed ru_routing package dir>/tools/re2check/
+# main.go` at build/validate time, not just at image-build time (see
+# src/ru_routing/normalize.py -- main.go ships as package data alongside the
+# installed ru_routing package, not as a separate /work/tools copy, so the
+# validator resolves correctly regardless of how the package is installed).
 COPY --from=golang:1.25-bookworm /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOCACHE=/tmp/gocache
@@ -144,7 +148,6 @@ RUN chmod +x /usr/local/bin/dlc /usr/local/bin/geoip \
 WORKDIR /work
 COPY pyproject.toml /work/pyproject.toml
 COPY src /work/src
-COPY tools /work/tools
 COPY examples /work/examples
 COPY config /work/config
 COPY tests /work/tests

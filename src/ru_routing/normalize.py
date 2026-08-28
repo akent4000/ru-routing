@@ -31,7 +31,7 @@ class RegexValidator(Protocol):
     def validate(self, pattern: str) -> None: ...
 
 
-_RE2CHECK = Path(__file__).resolve().parents[2] / "tools" / "re2check" / "main.go"
+_RE2CHECK = Path(__file__).resolve().parent / "tools" / "re2check" / "main.go"
 
 
 @dataclass(frozen=True)
