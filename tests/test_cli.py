@@ -301,6 +301,7 @@ def test_rollback_rejects_cli_version_different_from_target_manifest(
 
     assert exit_code != 0
     assert "does not match target manifest" in capsys.readouterr().err
+    assert backend.put_log == []
 
 
 def test_rollback_rejects_archive_internal_manifest_with_clear_error(
@@ -328,5 +329,4 @@ def test_rollback_rejects_archive_internal_manifest_with_clear_error(
     error = capsys.readouterr().err
     assert "rollback failed" in error
     assert "archive_" in error
-    assert backend.put_log == []
     assert backend.put_log == []
