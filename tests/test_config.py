@@ -143,7 +143,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "77f6abbe8025ba930135dcc0fc6c1a40639a0ede908f07f6f3d5b8503faa7f36"
+        "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
     )
 
     with pytest.raises(FrozenInstanceError):
