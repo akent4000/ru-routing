@@ -297,6 +297,13 @@ Recovery depends on where failure occurred:
   not republish; retry purging `/manifest.json` and the affected `/latest/*`
   URLs through Cloudflare, then run the bootstrap check.
 
+## Temporary development/testing freshness policy
+
+Until `2026-09-30 23:59 UTC`, `jutsu-dev/ru-route-lists` is accepted with a
+maximum age of 720 hours solely for development/testing releases. This does
+not relax any other validation. Restore its normal 48 hours freshness limit
+through a reviewed change before any run after that deadline.
+
 Rollback never rebuilds data. Download the immutable manifest that was
 published with the target version and promote its immutable tree. Do not use
 the archive-internal `release/manifest.json`: that file is created before the

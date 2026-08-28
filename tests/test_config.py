@@ -96,10 +96,17 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     )
     jutsu = registry.resolve("jutsu-dev/ru-route-lists")
     assert jutsu.layout == "release_assets"
+    assert jutsu.freshness.max_age_hours == 720
     assert jutsu.category_locations["blocked-domains"] == (
         "https://github.com/jutsu-dev/ru-route-lists/releases/download/"
         "latest/rkn-domains.lst",
     )
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "jutsu-dev/ru-route-lists" in readme
+    assert "development/testing" in readme
+    assert "720 hours" in readme
+    assert "2026-09-30 23:59 UTC" in readme
+    assert "48 hours" in readme
     assert thresholds.category_count_change_ratio == 0.5
     (source_removal,) = thresholds.source_removal_migrations
     assert source_removal.removed_source_ids == frozenset(UNVERIFIED_LICENSE_SOURCES)
