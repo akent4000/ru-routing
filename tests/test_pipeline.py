@@ -13,6 +13,7 @@ dlc/geoip/sing-box/mihomo/xray/go binaries are required to run this file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -112,11 +113,14 @@ def _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest: Path) -> 
             categories,
             source.name.split("/", 1)[0].lower(),
         )
+        digest = hashlib.sha256(content).hexdigest()
         relative = f"objects/live-{source.name.replace('/', '--')}.dat"
         (fetch_dest / relative).write_bytes(content)
         for entries in document["objects"].values():
             for item in entries:
                 item["path"] = relative
+                item["sha256"] = digest
+        document["sha256"] = digest
         (
             fetch_dest / "metadata" / f"{source.name.replace('/', '--')}.json"
         ).write_text(json.dumps(document), encoding="utf-8")
@@ -701,3 +705,102 @@ def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     assert manifest["release_version"]
     assert manifest["category_counts"]["lite:ru"] == 1
     assert manifest["category_counts"]["server:ru-geoip"] == 1
+
+
+def test_build_inputs_rejects_object_checksum_mismatch_in_metadata(tmp_path, capsys):
+    fetch_dest = tmp_path / "fetched"
+    exit_code = main(
+        [
+            "fetch",
+            "--config",
+            str(CONFIG_DIR),
+            "--destination",
+            str(fetch_dest),
+            "--offline-fixtures",
+            str(FIXTURES_DIR),
+        ]
+    )
+    assert exit_code == 0
+
+    _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest)
+
+    metadata_path = (
+        fetch_dest / "metadata" / "runetfreedom--russia-v2ray-rules-dat.json"
+    )
+    document = json.loads(metadata_path.read_text(encoding="utf-8"))
+    document["objects"]["category-ru"][0]["sha256"] = "0" * 64
+    metadata_path.write_text(json.dumps(document), encoding="utf-8")
+
+    dist = tmp_path / "dist"
+    exit_code = main(
+        [
+            "build",
+            "--inputs",
+            str(fetch_dest),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert "checksum" in error
+    assert "runetfreedom/russia-v2ray-rules-dat" in error
+    assert not dist.exists()
+
+
+def test_build_inputs_rejects_paths_outside_fetch_objects_tree(tmp_path, capsys):
+    fetch_dest = tmp_path / "fetched"
+    exit_code = main(
+        [
+            "fetch",
+            "--config",
+            str(CONFIG_DIR),
+            "--destination",
+            str(fetch_dest),
+            "--offline-fixtures",
+            str(FIXTURES_DIR),
+        ]
+    )
+    assert exit_code == 0
+
+    _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest)
+
+    metadata_path = (
+        fetch_dest / "metadata" / "runetfreedom--russia-v2ray-rules-dat.json"
+    )
+    document = json.loads(metadata_path.read_text(encoding="utf-8"))
+    source_object = fetch_dest / document["objects"]["category-ru"][0]["path"]
+    escaped_content = source_object.read_bytes()
+    escaped_path = tmp_path / "escaped-live-runet.dat"
+    escaped_path.write_bytes(escaped_content)
+    escaped_digest = hashlib.sha256(escaped_content).hexdigest()
+    for entries in document["objects"].values():
+        for item in entries:
+            item["path"] = "../escaped-live-runet.dat"
+            item["sha256"] = escaped_digest
+    document["sha256"] = escaped_digest
+    metadata_path.write_text(json.dumps(document), encoding="utf-8")
+
+    dist = tmp_path / "dist"
+    exit_code = main(
+        [
+            "build",
+            "--inputs",
+            str(fetch_dest),
+            "--dist",
+            str(dist),
+            "--config",
+            str(CONFIG_DIR),
+            "--fake-native-tools",
+        ]
+    )
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert "outside" in error or "unsafe" in error
+    assert "runetfreedom/russia-v2ray-rules-dat" in error
+    assert not dist.exists()

@@ -286,6 +286,17 @@ def test_publish_release_returns_release_version(tmp_path):
     assert result == "2026.08.26.0008-33333333"
 
 
+def test_publish_release_writes_complete_immutable_release_manifest(tmp_path):
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.26.0009-44444444")
+
+    publish_release(plan, backend)
+
+    key = f"releases/{plan.manifest.release_version}/manifest.json"
+    assert json.loads(backend.get_object(key)) == plan.manifest.to_json_dict()
+    assert backend.objects[key].cache_control == "public, max-age=31536000, immutable"
+
+
 # --- Failure/cleanup: release-tree upload -----------------------------
 
 
@@ -731,6 +742,22 @@ def test_rollback_rejects_inconsistent_target_sha256sums_before_copying():
     )
 
     with pytest.raises(PublishError, match=r"SHA256SUMS hash"):
+        rollback(target.release_version, backend, target_manifest=target)
+
+    assert backend.put_log == []
+    assert backend.purged == []
+
+
+def test_rollback_rejects_incomplete_archive_internal_manifest():
+    backend = FakeBackend()
+    target = replace(
+        _manifest("2026.08.19.0000-target00"),
+        archive_filename=None,
+        archive_sha256=None,
+        archive_size_bytes=None,
+    )
+
+    with pytest.raises(PublishError, match=r"archive_"):
         rollback(target.release_version, backend, target_manifest=target)
 
     assert backend.put_log == []

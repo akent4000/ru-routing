@@ -36,7 +36,7 @@
         "outboundTag": "direct"
       },
       {
-        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category). spy is sourced from aireps/geosite (domain-only; no CIDR source), so there is no corresponding IP rule.",
+        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category). spy is sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there is no corresponding IP rule.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:spy"],
         "outboundTag": "block"

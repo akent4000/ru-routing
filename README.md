@@ -297,17 +297,15 @@ Recovery depends on where failure occurred:
   not republish; retry purging `/manifest.json` and the affected `/latest/*`
   URLs through Cloudflare, then run the bootstrap check.
 
-Rollback never rebuilds data. Download the prior GitHub release archive,
-extract its manifest, and promote its immutable tree:
+Rollback never rebuilds data. Download the immutable manifest that was
+published with the target version and promote its immutable tree. Do not use
+the archive-internal `release/manifest.json`: that file is created before the
+final archive metadata exists, so rollback rejects it as incomplete.
 
 ```bash
 VERSION='<published-version>'
 mkdir -p output/rollback
-gh release download "$VERSION" \
-  --repo "$GITHUB_REPOSITORY" \
-  --pattern "$VERSION.tar.gz" \
-  --dir output/rollback
-tar -xOf "output/rollback/$VERSION.tar.gz" release/manifest.json \
+curl -fsSL "https://routing.akent.site/releases/$VERSION/manifest.json" \
   > output/rollback/target-manifest.json
 
 docker compose run --rm \
@@ -326,7 +324,9 @@ verifies every chosen `/releases/<version>/` object against that manifest,
 copies the objects to `/latest/*`, replaces root `SHA256SUMS`, and writes the
 complete target manifest with `latest_version` last. It then purges all changed
 pointer/alias paths. Confirm the target fingerprints and checksums after
-completion.
+completion. Keep a backup copy of the published
+`/releases/<version>/manifest.json` alongside any release archive you retain
+for manual recovery.
 
 ## Attribution and bad routes
 

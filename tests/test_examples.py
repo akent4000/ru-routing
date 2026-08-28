@@ -236,6 +236,22 @@ def test_mihomo_lite_rule_order_and_default():
         assert excluded not in provider_names
 
 
+def test_lite_spy_comments_reference_the_live_runetfreedom_source():
+    xray = _load_json_template("xray-lite.json")
+    spy_target = ["ext:geosite-lite.dat:spy"]
+    spy_rule = next(
+        rule
+        for rule in xray["routing"]["rules"]
+        if rule.get("domain") == spy_target
+    )
+    assert "runetfreedom/russia-v2ray-rules-dat" in spy_rule["_comment"]
+    assert "aireps/geosite" not in spy_rule["_comment"]
+
+    mihomo_text = (TEMPLATES_DIR / "mihomo-lite.yaml").read_text(encoding="utf-8")
+    assert "runetfreedom/russia-v2ray-rules-dat" in mihomo_text
+    assert "spy is sourced from aireps/geosite" not in mihomo_text
+
+
 # ---------------------------------------------------------------------------
 # Server: private -> DIRECT, bittorrent -> BLOCK, spy/ads -> BLOCK, example
 # services -> node-example, default -> DIRECT

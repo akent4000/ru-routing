@@ -60,7 +60,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 import httpx
@@ -354,13 +354,13 @@ def _add_rollback_arguments(command_parser: argparse.ArgumentParser) -> None:
         required=True,
         metavar="FILE",
         help=(
-            "local copy of the manifest.json that was published alongside "
-            "--version (e.g. downloaded from "
-            "releases/<version>/manifest.json or restored from a backup); "
-            "rollback does not rebuild anything and has no --dist of its "
-            "own, so this file's checksums are what tell rollback which "
-            "objects under releases/<version>/ to re-copy into /latest/* "
-            "and what sha256 to verify the copy against"
+            "local copy of the immutable manifest.json published for "
+            "--version (download /releases/<version>/manifest.json or use a "
+            "backup of that file, not the archive-internal release/manifest.json); "
+            "rollback does not rebuild anything and has no --dist of its own, "
+            "so this file's checksums are what tell rollback which objects "
+            "under releases/<version>/ to re-copy into /latest/* and what "
+            "sha256 to verify the copy against"
         ),
     )
     _add_repo_argument(command_parser)
@@ -651,12 +651,21 @@ def _fetched_sources_from_inputs(
     concrete ``Path`` under ``<inputs>/objects/``.
     """
 
-    metadata_dir = Path(inputs_dir) / "metadata"
+    inputs_dir = Path(inputs_dir)
+    metadata_dir = inputs_dir / "metadata"
+    objects_dir = inputs_dir / "objects"
     if not metadata_dir.is_dir():
         raise PipelineCliError(
             f"{inputs_dir} does not look like a fetch output directory "
             "(missing metadata/)"
         )
+    if not objects_dir.is_dir():
+        raise PipelineCliError(
+            f"{inputs_dir} does not look like a fetch output directory "
+            "(missing objects/)"
+        )
+    objects_root = objects_dir.resolve()
+    digest_cache: dict[Path, str] = {}
     fetched: list[FetchedSource] = []
     for source in registry.sources:
         metadata_path = metadata_dir / f"{source.name.replace('/', '--')}.json"
@@ -667,7 +676,15 @@ def _fetched_sources_from_inputs(
         document = json.loads(metadata_path.read_text(encoding="utf-8"))
         object_paths = {
             category: tuple(
-                Path(inputs_dir) / entry["path"] for entry in entries
+                _validated_input_object_path(
+                    source.name,
+                    category,
+                    entry,
+                    inputs_dir=inputs_dir,
+                    objects_root=objects_root,
+                    digest_cache=digest_cache,
+                )
+                for entry in entries
             )
             for category, entries in document["objects"].items()
         }
@@ -684,6 +701,71 @@ def _fetched_sources_from_inputs(
             )
         )
     return tuple(fetched)
+
+
+def _validated_input_object_path(
+    source_name: str,
+    category: str,
+    entry: Mapping[str, object],
+    *,
+    inputs_dir: Path,
+    objects_root: Path,
+    digest_cache: dict[Path, str],
+) -> Path:
+    relative = entry.get("path")
+    if not isinstance(relative, str) or not relative:
+        raise PipelineCliError(
+            f"{source_name}: {category}: fetched object entry is missing a valid path"
+        )
+    expected_digest = entry.get("sha256")
+    if not _is_sha256(expected_digest):
+        raise PipelineCliError(
+            f"{source_name}: {category}: fetched object {relative} "
+            "has an invalid sha256"
+        )
+    lexical = PurePosixPath(relative)
+    if (
+        lexical.is_absolute()
+        or ".." in lexical.parts
+        or not lexical.parts
+        or lexical.parts[0] != "objects"
+        or str(lexical) != relative
+    ):
+        raise PipelineCliError(
+            f"{source_name}: {category}: fetched object path {relative!r} is unsafe"
+        )
+    candidate = inputs_dir / relative
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise PipelineCliError(
+            f"{source_name}: {category}: cannot read fetched object {relative}: {error}"
+        ) from error
+    try:
+        resolved.relative_to(objects_root)
+    except ValueError as error:
+        raise PipelineCliError(
+            f"{source_name}: {category}: fetched object path {relative!r} "
+            "resolves outside objects/"
+        ) from error
+    actual_digest = digest_cache.get(resolved)
+    if actual_digest is None:
+        actual_digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        digest_cache[resolved] = actual_digest
+    if actual_digest != expected_digest:
+        raise PipelineCliError(
+            f"{source_name}: {category}: fetched object checksum mismatch "
+            f"for {relative}"
+        )
+    return resolved
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _load_rules(

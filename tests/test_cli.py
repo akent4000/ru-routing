@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -300,4 +301,32 @@ def test_rollback_rejects_cli_version_different_from_target_manifest(
 
     assert exit_code != 0
     assert "does not match target manifest" in capsys.readouterr().err
+
+
+def test_rollback_rejects_archive_internal_manifest_with_clear_error(
+    capsys, tmp_path
+):
+    backend = FakeBackend()
+    target = replace(
+        _manifest("2026.08.26.0000-aaaaaaaa"),
+        archive_filename=None,
+        archive_sha256=None,
+        archive_size_bytes=None,
+    )
+    target_path = _write_manifest_file(tmp_path / "target.json", target)
+    arguments = _Namespace(
+        version=target.release_version,
+        target_manifest=target_path,
+        repo="owner/name",
+    )
+
+    exit_code = _handle_rollback(
+        arguments, backend_factory=lambda repo: backend
+    )
+
+    assert exit_code == 4
+    error = capsys.readouterr().err
+    assert "rollback failed" in error
+    assert "archive_" in error
+    assert backend.put_log == []
     assert backend.put_log == []

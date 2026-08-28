@@ -169,6 +169,7 @@ def publish_release(plan: PublishPlan, backend: PublishBackend) -> str:
             backend.upload_release_asset(release_id, spec.key, spec.content)
 
         _upload_and_verify_release_tree(backend, version, specs)
+        _upload_and_verify_release_manifest(backend, plan.manifest)
 
         latest_overwritten = True
         _copy_specs_to_latest(backend, specs)
@@ -374,14 +375,44 @@ def _write_manifest(backend: PublishBackend, manifest: Manifest) -> None:
         content_type="text/plain",
         cache_control=_REVALIDATE_CACHE_CONTROL,
     )
-    payload = {**manifest.to_json_dict(), "latest_version": manifest.release_version}
-    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body = _manifest_json_bytes(manifest, latest_version=manifest.release_version)
     backend.put_object(
         "manifest.json",
         body,
         content_type="application/json",
         cache_control=_REVALIDATE_CACHE_CONTROL,
     )
+
+
+def _upload_and_verify_release_manifest(
+    backend: PublishBackend, manifest: Manifest
+) -> None:
+    version = manifest.release_version
+    if not version:
+        raise PublishError(
+            "cannot publish immutable release manifest without a version"
+        )
+    key = f"releases/{version}/manifest.json"
+    body = _manifest_json_bytes(manifest)
+    backend.put_object(
+        key,
+        body,
+        content_type="application/json",
+        cache_control=_IMMUTABLE_CACHE_CONTROL,
+    )
+    if backend.get_object(key) != body:
+        raise PublishError(
+            f"read-back verification failed for immutable release manifest {key}"
+        )
+
+
+def _manifest_json_bytes(
+    manifest: Manifest, *, latest_version: str | None = None
+) -> bytes:
+    payload = manifest.to_json_dict()
+    if latest_version is not None:
+        payload = {**payload, "latest_version": latest_version}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _sha256sums_body(manifest: Manifest) -> bytes:
@@ -409,6 +440,35 @@ def _validate_rollback_target(version: str, manifest: Manifest) -> None:
             raise PublishError(f"target manifest has an invalid {name}")
     if not manifest.checksums:
         raise PublishError("target manifest has no artifact checksums")
+    archive_fields = (
+        ("archive_filename", manifest.archive_filename),
+        ("archive_sha256", manifest.archive_sha256),
+        ("archive_size_bytes", manifest.archive_size_bytes),
+    )
+    for field_name, value in archive_fields:
+        if value is None:
+            raise PublishError(
+                f"target manifest is incomplete for rollback: missing {field_name}"
+            )
+    archive_filename = manifest.archive_filename
+    archive_sha256 = manifest.archive_sha256
+    archive_size_bytes = manifest.archive_size_bytes
+    archive_path = PurePosixPath(archive_filename)
+    if (
+        not archive_filename
+        or archive_path.is_absolute()
+        or ".." in archive_path.parts
+        or archive_path.name != archive_filename
+    ):
+        raise PublishError("target manifest has an invalid archive_filename")
+    if not _is_sha256(archive_sha256):
+        raise PublishError("target manifest has an invalid archive_sha256")
+    if (
+        not isinstance(archive_size_bytes, int)
+        or isinstance(archive_size_bytes, bool)
+        or archive_size_bytes < 0
+    ):
+        raise PublishError("target manifest has an invalid archive_size_bytes")
     if set(manifest.artifact_sizes) != set(manifest.checksums):
         raise PublishError(
             "target manifest artifact_sizes and checksums name different paths"
