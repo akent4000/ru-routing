@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+import random
+import time
+
 import pytest
 
 from ru_routing.config import (
@@ -8,7 +12,18 @@ from ru_routing.config import (
     CategoryPolicy,
 )
 from ru_routing.models import Category, Dataset, PolicyTier, RuleEntry, RuleKind
-from ru_routing.resolve import ResolutionError, assert_server_superset, resolve_datasets
+from ru_routing.resolve import (
+    ResolutionError,
+    _build_blocker_indexes,
+    _entries_overlap,
+    _resolve_categories,
+    _takes_ownership,
+    assert_server_superset,
+    resolve_datasets,
+)
+from ru_routing.resolve import (
+    _conflicts as _indexed_conflicts,
+)
 
 
 def test_blocked_subdomain_removes_overlapping_lite_ru_suffix():
@@ -527,3 +542,267 @@ def entries(dataset: Dataset, category: str) -> set[tuple[str, str]]:
         (entry.kind.value, entry.value)
         for entry in dataset.categories[category].entries
     }
+
+
+# --- Differential test: indexed resolution vs. a plain pairwise reference ---
+#
+# The indexed _resolve_categories/_conflicts in resolve.py must produce
+# exactly the same result as a naive O(N*M) pairwise scan using the
+# original _entries_overlap/_takes_ownership primitives (still present in
+# resolve.py, kept as the semantic reference). Hand-written fixtures above
+# cover every documented overlap rule individually; this generates random
+# combinations to catch interaction bugs (e.g. the suffix-trie's symmetric
+# containment) that fixed examples might miss.
+
+
+def _reference_resolve_categories(
+    dataset: str,
+    categorized: dict[str, tuple[RuleEntry, ...]],
+    tiers: dict[str, PolicyTier],
+) -> dict[str, tuple[RuleEntry, ...]]:
+    """Naive pairwise reimplementation of the pre-index _resolve_categories."""
+
+    resolved: dict[str, tuple[RuleEntry, ...]] = {}
+    for category, category_entries in categorized.items():
+        tier = tiers[category]
+        blockers = tuple(
+            blocker
+            for blocker_category, blocker_entries in categorized.items()
+            if _takes_ownership(dataset, tiers[blocker_category], tier)
+            for blocker in blocker_entries
+        )
+        kept = []
+        for entry in category_entries:
+            if entry.kind == RuleKind.CIDR:
+                remaining = [ipaddress.ip_network(entry.value, strict=True)]
+                for blocker in blockers:
+                    if blocker.kind != RuleKind.CIDR:
+                        continue
+                    excluded = ipaddress.ip_network(blocker.value, strict=True)
+                    if excluded.version != remaining[0].version:
+                        continue
+                    next_remaining = []
+                    for candidate in remaining:
+                        if not candidate.overlaps(excluded):
+                            next_remaining.append(candidate)
+                        elif candidate.subnet_of(excluded):
+                            continue
+                        else:
+                            next_remaining.extend(candidate.address_exclude(excluded))
+                    remaining = next_remaining
+                    if not remaining:
+                        break
+                kept.extend(
+                    RuleEntry(
+                        kind=RuleKind.CIDR,
+                        value=str(network),
+                        sources=entry.sources,
+                        attributes=entry.attributes,
+                        memberships=entry.memberships,
+                    )
+                    for network in remaining
+                )
+            elif not any(_entries_overlap(entry, blocker) for blocker in blockers):
+                kept.append(entry)
+        resolved[category] = tuple(kept)
+    return resolved
+
+
+def _reference_conflicts(
+    dataset: str,
+    categorized: dict[str, tuple[RuleEntry, ...]],
+    tiers: dict[str, PolicyTier],
+) -> set[tuple[str, str, str, str, str, str, str]]:
+    pairs = set()
+    for higher_category, higher_entries in categorized.items():
+        for lower_category, lower_entries in categorized.items():
+            if not _takes_ownership(
+                dataset, tiers[higher_category], tiers[lower_category]
+            ):
+                continue
+            for higher_entry in higher_entries:
+                for lower_entry in lower_entries:
+                    if _entries_overlap(higher_entry, lower_entry):
+                        pairs.add(
+                            (
+                                dataset,
+                                higher_category,
+                                lower_category,
+                                higher_entry.kind.value,
+                                higher_entry.value,
+                                lower_entry.kind.value,
+                                lower_entry.value,
+                            )
+                        )
+    return pairs
+
+
+def _random_entries(rng: random.Random, count: int) -> list[RuleEntry]:
+    tlds = ["ru", "com", "org"]
+    entries_list = []
+    for i in range(count):
+        choice = rng.random()
+        if choice < 0.4:
+            depth = rng.randint(1, 3)
+            labels = [f"label{rng.randint(0, 12)}" for _ in range(depth)]
+            value = ".".join([*labels, rng.choice(tlds)])
+            kind = RuleKind.DOMAIN
+        elif choice < 0.75:
+            depth = rng.randint(0, 2)
+            labels = [f"label{rng.randint(0, 12)}" for _ in range(depth)]
+            tld = rng.choice(tlds)
+            value = ".".join([*labels, tld]) if labels else tld
+            kind = RuleKind.DOMAIN_SUFFIX
+        elif choice < 0.85:
+            octet = rng.randint(0, 254)
+            prefix = rng.choice([24, 25, 26, 28])
+            value = f"10.{rng.randint(0,3)}.{octet}.0/{prefix}"
+            kind = RuleKind.CIDR
+        elif choice < 0.93:
+            value = f"kw{rng.randint(0, 3)}"
+            kind = RuleKind.DOMAIN_KEYWORD
+        else:
+            value = f"re{rng.randint(0, 3)}"
+            kind = RuleKind.DOMAIN_REGEX
+        entries_list.append(
+            RuleEntry(
+                kind=kind,
+                value=value,
+                sources=frozenset({"fixture"}),
+                memberships=frozenset({("fixture", f"cat{i % 5}")}),
+            )
+        )
+    return entries_list
+
+
+def test_indexed_resolution_matches_pairwise_reference_on_random_data():
+    rng = random.Random(1234)
+    tiers = {
+        "cat0": PolicyTier.DENY,
+        "cat1": PolicyTier.EXPLICIT_BLOCKED,
+        "cat2": PolicyTier.TRUSTED_DIRECT,
+        "cat3": PolicyTier.THEMATIC,
+        "cat4": PolicyTier.THEMATIC,
+    }
+    for dataset in ("lite", "server"):
+        categorized: dict[str, tuple[RuleEntry, ...]] = {}
+        for i in range(5):
+            category = f"cat{i}"
+            categorized[category] = tuple(_random_entries(rng, 40))
+
+        indexes = _build_blocker_indexes(dataset, categorized, tiers)
+
+        expected_resolved = _reference_resolve_categories(dataset, categorized, tiers)
+        actual_resolved = _resolve_categories(categorized, indexes)
+        for category in categorized:
+            assert set(actual_resolved[category]) == set(
+                expected_resolved[category]
+            ), f"dataset={dataset} category={category}"
+
+        expected_conflicts = _reference_conflicts(dataset, categorized, tiers)
+        actual_conflicts = {
+            (
+                conflict.dataset,
+                conflict.higher_category,
+                conflict.lower_category,
+                conflict.higher_entry.kind.value,
+                conflict.higher_entry.value,
+                conflict.lower_entry.kind.value,
+                conflict.lower_entry.value,
+            )
+            for conflict in _indexed_conflicts(dataset, categorized, indexes)
+        }
+        assert actual_conflicts == expected_conflicts, f"dataset={dataset}"
+
+
+def test_indexed_cidr_conflicts_match_pairwise_reference_on_random_data():
+    """CIDR conflict-pair emission uses a sorted interval index
+    (_cidr_overlapping_blockers) instead of a full pairwise scan -- verify
+    it finds exactly the same overlapping pairs as the reference for a
+    CIDR-heavy random dataset (IPv4 and IPv6, varied prefix lengths)."""
+
+    rng = random.Random(2024)
+    tiers = {
+        "cat0": PolicyTier.DENY,
+        "cat1": PolicyTier.EXPLICIT_BLOCKED,
+        "cat2": PolicyTier.TRUSTED_DIRECT,
+        "cat3": PolicyTier.THEMATIC,
+    }
+
+    def random_cidrs(rng: random.Random, count: int) -> list[RuleEntry]:
+        result = []
+        for i in range(count):
+            if rng.random() < 0.7:
+                block = rng.randint(0, 8)
+                octet = rng.randint(0, 254)
+                prefix = rng.choice([12, 16, 20, 24, 25, 26, 28, 30, 32])
+                address = f"10.{block}.{octet}.0/{prefix}"
+                net = ipaddress.ip_network(address, strict=False)
+            else:
+                block = rng.randint(0, 8)
+                prefix = rng.choice([32, 48, 56, 64, 96, 112])
+                net = ipaddress.ip_network(f"2001:db8:{block}::/{prefix}", strict=False)
+            result.append(
+                RuleEntry(
+                    kind=RuleKind.CIDR,
+                    value=str(net),
+                    sources=frozenset({"fixture"}),
+                    memberships=frozenset({("fixture", f"cat{i % 4}")}),
+                )
+            )
+        return result
+
+    for dataset in ("lite", "server"):
+        categorized: dict[str, tuple[RuleEntry, ...]] = {
+            f"cat{i}": tuple(random_cidrs(rng, 200)) for i in range(4)
+        }
+        indexes = _build_blocker_indexes(dataset, categorized, tiers)
+
+        expected = set()
+        for hc, hes in categorized.items():
+            for lc, les in categorized.items():
+                if not _takes_ownership(dataset, tiers[hc], tiers[lc]):
+                    continue
+                for he in hes:
+                    for le in les:
+                        if _entries_overlap(he, le):
+                            expected.add((hc, lc, he.value, le.value))
+
+        actual = {
+            (
+                c.higher_category,
+                c.lower_category,
+                c.higher_entry.value,
+                c.lower_entry.value,
+            )
+            for c in _indexed_conflicts(dataset, categorized, indexes)
+        }
+        assert actual == expected, f"dataset={dataset}"
+
+
+def test_resolve_datasets_handles_a_moderately_large_synthetic_dataset_quickly():
+    rng = random.Random(99)
+    policy = policy_for("blocked", "spy", "ru", "thematic-a", "thematic-b")
+
+    rules = []
+    for i in range(40_000):
+        rng_choice = rng.random()
+        if rng_choice < 0.5:
+            category = rng.choice(["blocked", "ru", "thematic-a", "thematic-b"])
+        elif rng_choice < 0.7:
+            category = "spy"
+        else:
+            category = "blocked"
+        depth = rng.randint(1, 3)
+        labels = [f"l{rng.randint(0, 500)}" for _ in range(depth)]
+        tld = rng.choice(["ru", "com", "org"])
+        value = ".".join([*labels, tld])
+        kind = RuleKind.DOMAIN if rng.random() < 0.6 else RuleKind.DOMAIN_SUFFIX
+        rules.append(rule(kind, value, category))
+
+    started = time.monotonic()
+    build = resolve_datasets(tuple(rules), policy)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 15.0, f"resolve_datasets took {elapsed:.2f}s for 40k rules"
+    assert build.lite.categories

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from .config import CategoryPolicy
@@ -91,20 +92,33 @@ def resolve_datasets(
     for dataset in ("lite", "server"):
         entries = categorized[dataset]
         tiers = {name: policy.canonical_category(name).tier for name in entries}
-        before = _conflicts(dataset, entries, tiers)
-        resolved = _resolve_categories(dataset, entries, tiers)
-        after = _conflicts(dataset, resolved, tiers)
+        # Build the blocker indexes once from the pre-resolution entries and
+        # reuse them for both the "before" conflict report and the actual
+        # resolution pass -- both read the same source data, so rebuilding
+        # per call would double index-construction cost for no benefit.
+        # "after" is a separate build since resolution changes the entries.
+        before_indexes = _build_blocker_indexes(dataset, entries, tiers)
+        before = _conflicts(dataset, entries, before_indexes)
+        resolved = _resolve_categories(entries, before_indexes)
+        after_indexes = _build_blocker_indexes(dataset, resolved, tiers)
+        after = _conflicts(dataset, resolved, after_indexes)
         resolved_datasets[dataset] = resolved
         conflicts_before.extend(before)
         conflicts_after.extend(after)
 
     sorted_before = tuple(sorted(conflicts_before, key=_conflict_key))
     sorted_after = tuple(sorted(conflicts_after, key=_conflict_key))
+    # `Conflict` is a frozen dataclass with RuleEntry fields, so it's
+    # hashable -- use a set for the membership check below instead of
+    # linear-scanning `sorted_after` (a tuple) once per element of
+    # `sorted_before`, which turns this into an O(N*M) scan at scale (both
+    # lists can be hundreds of thousands of entries on live data).
+    after_set = frozenset(sorted_after)
     report = ConflictReport(
         overlaps_before=sorted_before,
         overlaps_after=sorted_after,
         resolved=tuple(
-            conflict for conflict in sorted_before if conflict not in sorted_after
+            conflict for conflict in sorted_before if conflict not in after_set
         ),
     )
 
@@ -185,23 +199,16 @@ class _Provenance:
 
 
 def _resolve_categories(
-    dataset: str,
     categorized: dict[str, tuple[RuleEntry, ...]],
-    tiers: dict[str, PolicyTier],
+    indexes: dict[str, _BlockerIndex],
 ) -> dict[str, tuple[RuleEntry, ...]]:
     resolved: dict[str, tuple[RuleEntry, ...]] = {}
     for category, entries in categorized.items():
-        tier = tiers[category]
-        blockers = tuple(
-            blocker
-            for blocker_category, blocker_entries in categorized.items()
-            if _takes_ownership(dataset, tiers[blocker_category], tier)
-            for blocker in blocker_entries
-        )
+        index = indexes[category]
         resolved[category] = tuple(
             replacement
             for entry in entries
-            for replacement in _subtract_entry(entry, blockers)
+            for replacement in _subtract_entry(entry, index)
         )
     return resolved
 
@@ -216,26 +223,354 @@ def _takes_ownership(dataset: str, higher: PolicyTier, lower: PolicyTier) -> boo
     return True
 
 
-def _subtract_entry(
-    entry: RuleEntry, blockers: tuple[RuleEntry, ...]
-) -> tuple[RuleEntry, ...]:
+_Blocker = tuple[str, RuleEntry]
+"""A blocker entry paired with the category it came from."""
+
+
+@dataclass
+class _BlockerIndex:
+    """Fast-lookup structures over one lower category's blocker entries.
+
+    Overlap decisions only ever depend on ``kind``/``value`` (see
+    ``_entries_overlap``), so every structure here is keyed on those alone;
+    each stored blocker keeps its source category alongside the
+    ``RuleEntry`` for ``Conflict`` pair emission in ``_conflicts``.
+    """
+
+    exact_domains: dict[str, list[_Blocker]]
+    suffix_trie: dict
+    fail_closed: tuple[_Blocker, ...]
+    cidr_by_version: dict[int, list[_Blocker]]
+    # Sorted-by-start-address view of cidr_by_version, built lazily (only
+    # when a CIDR conflict-pair query actually needs it -- _subtract_cidr's
+    # geometric splitting doesn't). Interval-overlap queries against this
+    # via _cidr_overlapping_blockers are O(log n + k) instead of the O(n)
+    # full scan cidr_by_version would require per candidate -- matters when
+    # a tier has tens of thousands of CIDR blockers (e.g. live "blocked").
+    _cidr_sorted: dict[int, list[tuple[int, int, _Blocker]]] = field(
+        default_factory=dict
+    )
+    _cidr_max_end: dict[int, list[int]] = field(default_factory=dict)
+
+
+def _build_blocker_indexes(
+    dataset: str,
+    categorized: dict[str, tuple[RuleEntry, ...]],
+    tiers: dict[str, PolicyTier],
+) -> dict[str, _BlockerIndex]:
+    """Build one ``_BlockerIndex`` per category, sharing builds across
+    categories whose blocker set is identical.
+
+    ``_takes_ownership(dataset, blocker_tier, tier)`` depends only on
+    ``tier`` (and the fixed ``dataset``), so every category at the same
+    tier sees exactly the same set of blocker categories/entries. Live
+    data has few tiers but potentially many categories per tier (e.g.
+    several THEMATIC categories all shadowed by the same DENY/
+    EXPLICIT_BLOCKED categories) -- building the index once per tier
+    instead of once per category avoids duplicating multi-million-entry
+    blocker structures (exact_domains dict, suffix trie) across every
+    category that happens to share the same blockers.
+    """
+
+    indexes_by_tier: dict[PolicyTier, _BlockerIndex] = {}
+    indexes: dict[str, _BlockerIndex] = {}
+    for category in categorized:
+        tier = tiers[category]
+        if tier in indexes_by_tier:
+            indexes[category] = indexes_by_tier[tier]
+            continue
+        exact_domains: dict[str, list[_Blocker]] = {}
+        suffix_trie: dict = {}
+        fail_closed: list[_Blocker] = []
+        cidr_by_version: dict[int, list[_Blocker]] = {}
+        for blocker_category, blocker_entries in categorized.items():
+            if not _takes_ownership(dataset, tiers[blocker_category], tier):
+                continue
+            for blocker in blocker_entries:
+                item = (blocker_category, blocker)
+                if blocker.kind == RuleKind.DOMAIN:
+                    exact_domains.setdefault(blocker.value, []).append(item)
+                    _domain_trie_insert(suffix_trie, item)
+                elif blocker.kind == RuleKind.DOMAIN_SUFFIX:
+                    _suffix_trie_insert(suffix_trie, item)
+                elif blocker.kind in (RuleKind.DOMAIN_KEYWORD, RuleKind.DOMAIN_REGEX):
+                    fail_closed.append(item)
+                elif blocker.kind == RuleKind.CIDR:
+                    network = ipaddress.ip_network(blocker.value, strict=True)
+                    cidr_by_version.setdefault(network.version, []).append(item)
+        index = _BlockerIndex(
+            exact_domains=exact_domains,
+            suffix_trie=suffix_trie,
+            fail_closed=tuple(fail_closed),
+            cidr_by_version=cidr_by_version,
+        )
+        indexes_by_tier[tier] = index
+        indexes[category] = index
+    return indexes
+
+
+def _suffix_trie_insert(trie: dict, item: _Blocker) -> None:
+    _, blocker = item
+    labels = tuple(reversed(blocker.value.split(".")))
+    node = _trie_walk_and_mark(trie, labels)
+    node.setdefault("terminal", []).append(item)
+
+
+def _domain_trie_insert(trie: dict, item: _Blocker) -> None:
+    """Thread a DOMAIN blocker's own label path through the suffix trie.
+
+    Not a suffix terminal (a DOMAIN value never blocks a narrower
+    candidate the way a DOMAIN_SUFFIX would), but its presence must be
+    discoverable when a DOMAIN_SUFFIX candidate is a strict ancestor of
+    this DOMAIN value -- matches the original ``_domains_overlap``
+    DOMAIN-under-candidate-SUFFIX check.
+    """
+
+    _, blocker = item
+    labels = tuple(reversed(blocker.value.split(".")))
+    node = _trie_walk_and_mark(trie, labels)
+    node.setdefault("domain_terminal", []).append(item)
+
+
+def _trie_walk_and_mark(trie: dict, labels: tuple[str, ...]) -> dict:
+    node = trie
+    node["has_descendant_terminal"] = True
+    for label in labels:
+        node = node.setdefault("children", {}).setdefault(label, {})
+        node["has_descendant_terminal"] = True
+    return node
+
+
+def _suffix_trie_has_overlap(
+    trie: dict, value: str, *, candidate_is_suffix: bool
+) -> bool:
+    """O(depth) boolean overlap check -- never materializes a match list.
+
+    Used by ``_is_blocked`` (the ``_resolve_categories`` fast path), which
+    only needs to know *whether* an entry is blocked, not which blockers
+    matched. Mirrors ``_suffix_trie_lookup``'s traversal exactly, just
+    short-circuiting on the first hit instead of collecting every match --
+    this matters at scale: a broad candidate (e.g. a single-label TLD
+    suffix) can be a strict ancestor of hundreds of thousands of blocker
+    entries, and materializing that whole subtree for a boolean answer is
+    the difference between O(depth) and O(subtree size) per entry.
+    """
+
+    labels = tuple(reversed(value.split(".")))
+    node = trie
+    for label in labels:
+        children = node.get("children")
+        if not children or label not in children:
+            return False
+        node = children[label]
+        if "terminal" in node:
+            return True
+    if candidate_is_suffix:
+        if node.get("domain_terminal"):
+            return True
+        if node.get("children") and node.get("has_descendant_terminal"):
+            return True
+    return False
+
+
+def _suffix_trie_lookup(
+    trie: dict, value: str, *, candidate_is_suffix: bool
+) -> list[_Blocker]:
+    """Return blocker items whose DOMAIN_SUFFIX overlaps ``value``.
+
+    Walks the reversed-label trie one label at a time. A terminal node
+    visited along the way means ``value`` is equal to or narrower than a
+    blocker suffix (covers DOMAIN-under-SUFFIX and narrower-SUFFIX-under-
+    broader-SUFFIX). If every label of ``value`` is consumed and the
+    landing node has descendants, ``value`` is itself a strict ancestor of
+    some blocker suffix -- only relevant when ``value`` is itself a
+    DOMAIN_SUFFIX (a DOMAIN value is never treated as broader than a
+    blocker suffix, matching the original ``_domains_overlap`` semantics).
+
+    This materializes every matching blocker and is used only where the
+    actual blocker objects are needed (``_matching_blockers``, for
+    ``Conflict`` pair emission) -- prefer ``_suffix_trie_has_overlap`` for a
+    pure boolean check, since collecting a huge descendant subtree just to
+    discard it is the difference between O(depth) and O(subtree size).
+    """
+
+    labels = tuple(reversed(value.split(".")))
+    node = trie
+    matches: list[_Blocker] = []
+    for label in labels:
+        children = node.get("children")
+        if not children or label not in children:
+            return matches
+        node = children[label]
+        if "terminal" in node:
+            matches.extend(node["terminal"])
+    if candidate_is_suffix:
+        # A DOMAIN blocker with the exact same value as this DOMAIN_SUFFIX
+        # candidate also overlaps (matches the original _is_domain_suffix's
+        # `domain == suffix` branch, reached when the DOMAIN side is the
+        # blocker and the DOMAIN_SUFFIX side is the candidate).
+        matches.extend(node.get("domain_terminal", ()))
+        if node.get("children") and node.get("has_descendant_terminal"):
+            # `value`'s own terminal match (if any, added above) covers
+            # value-is-narrower-than-or-equal-to-a-blocker-suffix;
+            # descendants below this node are a genuinely separate case
+            # (value is a strict ancestor of some blocker suffix/domain)
+            # and must be collected regardless of whether a terminal match
+            # was already found here.
+            for child in node["children"].values():
+                matches.extend(_collect_terminals(child))
+    return matches
+
+
+def _collect_terminals(node: dict) -> list[_Blocker]:
+    collected: list[_Blocker] = list(node.get("terminal", ()))
+    collected.extend(node.get("domain_terminal", ()))
+    for child in node.get("children", {}).values():
+        collected.extend(_collect_terminals(child))
+    return collected
+
+
+def _is_blocked(entry: RuleEntry, index: _BlockerIndex) -> bool:
     if entry.kind == RuleKind.CIDR:
-        return _subtract_cidr(entry, blockers)
-    if any(_entries_overlap(entry, blocker) for blocker in blockers):
+        raise AssertionError("CIDR entries must use _subtract_cidr, not _is_blocked")
+    if index.fail_closed:
+        return True
+    if entry.kind in (RuleKind.DOMAIN_KEYWORD, RuleKind.DOMAIN_REGEX):
+        # Fail-closed: a KEYWORD/REGEX entry overlaps ANY other domain-kind
+        # blocker unconditionally (matches _entries_overlap's
+        # kind-membership check), not just other KEYWORD/REGEX blockers.
+        return bool(index.exact_domains) or _suffix_trie_has_any(index.suffix_trie)
+    if entry.kind == RuleKind.DOMAIN:
+        if entry.value in index.exact_domains:
+            return True
+        return _suffix_trie_has_overlap(
+            index.suffix_trie, entry.value, candidate_is_suffix=False
+        )
+    if entry.kind == RuleKind.DOMAIN_SUFFIX:
+        return _suffix_trie_has_overlap(
+            index.suffix_trie, entry.value, candidate_is_suffix=True
+        )
+    raise AssertionError(f"unhandled rule kind {entry.kind!r}")
+
+
+def _suffix_trie_has_any(trie: dict) -> bool:
+    return bool(trie.get("has_descendant_terminal"))
+
+
+def _cidr_sorted_view(
+    index: _BlockerIndex, version: int
+) -> tuple[list[tuple[int, int, _Blocker]], list[int]]:
+    """Build (and cache) a sorted-by-start-address view of one IP version's
+    CIDR blockers, plus a running-max-end array, for interval-overlap
+    queries. Built lazily since the boolean/geometric ``_subtract_cidr``
+    path never needs it.
+    """
+
+    if version not in index._cidr_sorted:
+        sortable = sorted(
+            (
+                (
+                    int(network.network_address),
+                    int(network.broadcast_address),
+                    item,
+                )
+                for item in index.cidr_by_version.get(version, ())
+                for network in (ipaddress.ip_network(item[1].value, strict=True),)
+            ),
+            key=lambda triple: triple[0],
+        )
+        index._cidr_sorted[version] = sortable
+        running_max = 0
+        max_ends = []
+        for _, end, _ in sortable:
+            running_max = max(running_max, end)
+            max_ends.append(running_max)
+        index._cidr_max_end[version] = max_ends
+    return index._cidr_sorted[version], index._cidr_max_end[version]
+
+
+def _cidr_overlapping_blockers(
+    index: _BlockerIndex, network: ipaddress.IPv4Network | ipaddress.IPv6Network
+) -> tuple[_Blocker, ...]:
+    """Return every CIDR blocker whose address range overlaps ``network``.
+
+    Two CIDR networks overlap iff their [start, end] address ranges
+    intersect (a CIDR network is a contiguous, power-of-two-aligned address
+    range, so range intersection is equivalent to ``ip_network.overlaps``).
+    Blockers are pre-sorted by start address; a binary search finds the
+    first blocker whose start could still be within the candidate's range,
+    and a running max-end array lets the scan stop as soon as no remaining
+    blocker (even the one with the largest end seen so far) could still
+    reach back to overlap -- avoiding an O(n) scan per candidate when only
+    a handful of blockers actually overlap.
+    """
+
+    query_start = int(network.network_address)
+    query_end = int(network.broadcast_address)
+    sorted_blockers, max_ends = _cidr_sorted_view(index, network.version)
+    if not sorted_blockers:
+        return ()
+    starts = [triple[0] for triple in sorted_blockers]
+    # Blockers starting after query_end can never overlap (start > end).
+    upper = bisect.bisect_right(starts, query_end)
+    matches: list[_Blocker] = []
+    for position in range(upper - 1, -1, -1):
+        if max_ends[position] < query_start:
+            # No blocker at or before this position can reach query_start.
+            break
+        blocker_start, blocker_end, item = sorted_blockers[position]
+        if blocker_end >= query_start:
+            matches.append(item)
+    return tuple(matches)
+
+
+def _matching_blockers(entry: RuleEntry, index: _BlockerIndex) -> tuple[_Blocker, ...]:
+    if entry.kind == RuleKind.CIDR:
+        network = ipaddress.ip_network(entry.value, strict=True)
+        return _cidr_overlapping_blockers(index, network)
+    if entry.kind in (RuleKind.DOMAIN_KEYWORD, RuleKind.DOMAIN_REGEX):
+        matched: list[_Blocker] = list(index.fail_closed)
+        for domain_blockers in index.exact_domains.values():
+            matched.extend(domain_blockers)
+        matched.extend(_collect_terminals(index.suffix_trie))
+        return tuple(matched)
+    matched = list(index.fail_closed)
+    if entry.kind == RuleKind.DOMAIN:
+        matched.extend(index.exact_domains.get(entry.value, ()))
+        matched.extend(
+            _suffix_trie_lookup(
+                index.suffix_trie, entry.value, candidate_is_suffix=False
+            )
+        )
+    elif entry.kind == RuleKind.DOMAIN_SUFFIX:
+        matched.extend(
+            _suffix_trie_lookup(
+                index.suffix_trie, entry.value, candidate_is_suffix=True
+            )
+        )
+    else:
+        raise AssertionError(f"unhandled rule kind {entry.kind!r}")
+    return tuple(matched)
+
+
+def _subtract_entry(entry: RuleEntry, index: _BlockerIndex) -> tuple[RuleEntry, ...]:
+    if entry.kind == RuleKind.CIDR:
+        return _subtract_cidr(entry, index)
+    if _is_blocked(entry, index):
         return ()
     return (entry,)
 
 
-def _subtract_cidr(
-    entry: RuleEntry, blockers: tuple[RuleEntry, ...]
-) -> tuple[RuleEntry, ...]:
-    remaining = [ipaddress.ip_network(entry.value, strict=True)]
-    for blocker in blockers:
-        if blocker.kind != RuleKind.CIDR:
-            continue
+def _subtract_cidr(entry: RuleEntry, index: _BlockerIndex) -> tuple[RuleEntry, ...]:
+    network = ipaddress.ip_network(entry.value, strict=True)
+    remaining = [network]
+    # Use the interval index to fetch only blockers whose range actually
+    # overlaps `network`, instead of scanning every CIDR blocker for this
+    # tier -- the same O(n) scan that made conflict-pair emission slow at
+    # live scale (tens of thousands of CIDR entries on both sides) applies
+    # here too, since this function is called once per CIDR candidate.
+    for _, blocker in _cidr_overlapping_blockers(index, network):
         excluded = ipaddress.ip_network(blocker.value, strict=True)
-        if excluded.version != remaining[0].version:
-            continue
         next_remaining = []
         for candidate in remaining:
             if not candidate.overlaps(excluded):
@@ -250,35 +585,34 @@ def _subtract_cidr(
     return tuple(
         RuleEntry(
             kind=RuleKind.CIDR,
-            value=str(network),
+            value=str(remaining_network),
             sources=entry.sources,
             attributes=entry.attributes,
             memberships=entry.memberships,
         )
-        for network in sorted(remaining, key=_network_key)
+        for remaining_network in sorted(remaining, key=_network_key)
     )
 
 
 def _conflicts(
     dataset: str,
     categorized: dict[str, tuple[RuleEntry, ...]],
-    tiers: dict[str, PolicyTier],
+    indexes: dict[str, _BlockerIndex],
 ) -> tuple[Conflict, ...]:
-    conflicts = [
-        Conflict(
-            dataset=dataset,
-            higher_category=higher_category,
-            lower_category=lower_category,
-            higher_entry=higher_entry,
-            lower_entry=lower_entry,
-        )
-        for higher_category, higher_entries in categorized.items()
-        for lower_category, lower_entries in categorized.items()
-        if _takes_ownership(dataset, tiers[higher_category], tiers[lower_category])
-        for higher_entry in higher_entries
-        for lower_entry in lower_entries
-        if _entries_overlap(higher_entry, lower_entry)
-    ]
+    conflicts: list[Conflict] = []
+    for lower_category, lower_entries in categorized.items():
+        index = indexes[lower_category]
+        for lower_entry in lower_entries:
+            for higher_category, higher_entry in _matching_blockers(lower_entry, index):
+                conflicts.append(
+                    Conflict(
+                        dataset=dataset,
+                        higher_category=higher_category,
+                        lower_category=lower_category,
+                        higher_entry=higher_entry,
+                        lower_entry=lower_entry,
+                    )
+                )
     return tuple(sorted(conflicts, key=_conflict_key))
 
 
