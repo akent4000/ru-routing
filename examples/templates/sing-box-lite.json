@@ -11,13 +11,6 @@
         "download_detour": "direct"
       },
       {
-        "tag": "blocked",
-        "type": "remote",
-        "format": "binary",
-        "url": "{{CDN_BASE}}/sing-box/lite/blocked.srs",
-        "download_detour": "direct"
-      },
-      {
         "tag": "ru",
         "type": "remote",
         "format": "binary",
@@ -44,18 +37,13 @@
         "outbound": "block"
       },
       {
-        "_comment": "3. Explicit Russian blocked domains/IPs to PROXY (prevents unsafe DIRECT matches).",
-        "rule_set": ["blocked"],
-        "outbound": "proxy"
-      },
-      {
-        "_comment": "4. Trusted RU and Russia-only traffic to DIRECT.",
+        "_comment": "3. Trusted RU and Russia-only traffic to DIRECT.",
         "rule_set": ["ru", "ru-inside"],
         "outbound": "direct"
       }
     ],
     "final": "proxy",
-    "_final_comment": "5. Unmatched traffic to PROXY: lite protects a client behind a VPN, so unrecognized destinations must not silently bypass the tunnel."
+    "_final_comment": "4. Unmatched traffic to PROXY: lite protects a client behind a VPN, so unrecognized destinations must not silently bypass the tunnel. This is also where the (server-only) 'blocked' domains/IPs land, since lite no longer carries an explicit blocked rule-set -- proxying by default already covers them."
   },
   "outbounds": [
     {

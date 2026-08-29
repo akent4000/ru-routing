@@ -26,6 +26,40 @@ _RETRY_DELAY_SECONDS = 0.1
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GITHUB_RAW_HOST = "raw.githubusercontent.com"
 
+# The exact `privateCIDRs` list from v2fly/geoip's plugin/special/private.go
+# (the canonical upstream source for Xray-core's built-in `geoip:private`),
+# verified against that file's live contents. RFC 1918/3927/4193/6598
+# private/loopback/link-local ranges plus the standard reserved
+# documentation/benchmarking/multicast/broadcast blocks -- not third-party
+# content, so no license/freshness/fetch concerns apply.
+_BUILTIN_PRIVATE_NETWORKS = (
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.88.99.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+    "255.255.255.255/32",
+    "::/128",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
+)
+
+_BUILTIN_CATEGORY_CONTENT = {
+    "private": "\n".join(_BUILTIN_PRIVATE_NETWORKS) + "\n",
+}
+
 
 class FetchError(RuntimeError):
     """Raised when a required source cannot be resolved or validated."""
@@ -115,6 +149,8 @@ def _fetch_source(
     client: httpx.Client,
 ) -> FetchedSource:
     _validate_license(source)
+    if source.input_type == "builtin":
+        return _fetch_builtin_source(source, objects_dir, metadata_dir)
     try:
         release = _resolve_release(source, client)
         if release is None:
@@ -154,6 +190,42 @@ def _fetch_source(
         raise FetchError(
             f"fetch failed for source {source.name}: request failed"
         ) from error
+
+
+def _fetch_builtin_source(
+    source: SourceDefinition, objects_dir: Path, metadata_dir: Path
+) -> FetchedSource:
+    """Write a built-in source's static content as if it had been
+    downloaded, with no network access, upstream revision, or freshness
+    check -- there is no upstream to be stale against.
+    """
+
+    paths: dict[str, tuple[Path, ...]] = {}
+    object_digests: list[str] = []
+    for category in source.expected_categories:
+        try:
+            content = _BUILTIN_CATEGORY_CONTENT[category].encode("utf-8")
+        except KeyError as error:
+            raise FetchError(
+                f"no built-in content declared for category {category!r}"
+            ) from error
+        digest = hashlib.sha256(content).hexdigest()
+        target = objects_dir / digest
+        if not target.exists():
+            target.write_bytes(content)
+        paths[category] = (target,)
+        object_digests.append(digest)
+    source_digest = _source_digest(tuple(object_digests))
+    fetched = FetchedSource(
+        name=source.name,
+        resolved_revision=source_digest,
+        sha256=source_digest,
+        license=source.license,
+        object_paths=paths,
+        observed_freshness_lag_hours=None,
+    )
+    _write_metadata(metadata_dir, source, fetched, 0.0, tuple(object_digests))
+    return fetched
 
 
 def _validate_license(source: SourceDefinition) -> None:

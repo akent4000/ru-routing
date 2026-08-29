@@ -155,7 +155,7 @@ def test_xray_lite_rule_order_and_default():
     assert rules[0]["outboundTag"] == "direct"
 
     # Every subsequent domain/ip target referencing "spy" must point to block,
-    # and must appear before any "blocked" or "ru" rule.
+    # and must appear before any "ru" rule.
     kind_by_index = []
     for rule in rules[1:]:
         targets = rule.get("domain", []) + rule.get("ip", [])
@@ -163,20 +163,17 @@ def test_xray_lite_rule_order_and_default():
         if "spy" in joined:
             assert rule["outboundTag"] == "block"
             kind_by_index.append("spy")
-        elif "blocked" in joined:
-            assert rule["outboundTag"] == "proxy"
-            kind_by_index.append("blocked")
         elif "ru" in joined:
             assert rule["outboundTag"] == "direct"
             kind_by_index.append("ru")
 
-    # spy comes before blocked, which comes before ru.
-    assert kind_by_index.index("spy") < kind_by_index.index("blocked")
-    assert kind_by_index.index("blocked") < kind_by_index.index("ru")
+    # spy comes before ru.
+    assert kind_by_index.index("spy") < kind_by_index.index("ru")
 
-    # Only spy is blocked by default in lite -- no ads/trackers/malware/phishing.
+    # lite no longer carries an explicit blocked rule (default outbound
+    # already proxies it) -- no ads/blocked/trackers/malware/phishing.
     all_text = json.dumps(document)
-    for excluded in ("ads", "trackers", "malware", "phishing"):
+    for excluded in ("ads", "blocked", "trackers", "malware", "phishing"):
         assert f":{excluded}\"" not in all_text
 
     # Default (unmatched) outbound is proxy: the first declared outbound.
@@ -195,18 +192,15 @@ def test_singbox_lite_rule_order_and_default():
         for rule in rules[1:]
         if "rule_set" in rule
     ]
-    assert rule_set_order.index("spy") < rule_set_order.index("blocked")
-    assert rule_set_order.index("blocked") < rule_set_order.index("ru")
+    assert rule_set_order.index("spy") < rule_set_order.index("ru")
 
     spy_rule = next(rule for rule in rules if rule.get("rule_set") == ["spy"])
     assert spy_rule["outbound"] == "block"
-    blocked_rule = next(rule for rule in rules if rule.get("rule_set") == ["blocked"])
-    assert blocked_rule["outbound"] == "proxy"
 
     assert document["route"]["final"] == "proxy"
 
     tags = {rs["tag"] for rs in document["route"]["rule_set"]}
-    for excluded in ("ads", "trackers", "malware", "phishing"):
+    for excluded in ("ads", "blocked", "trackers", "malware", "phishing"):
         assert excluded not in tags
 
 
@@ -220,19 +214,18 @@ def test_mihomo_lite_rule_order_and_default():
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))
 
     spy_index = index_of("RULE-SET,spy,")
-    blocked_index = index_of("RULE-SET,blocked,")
     ru_index = index_of("RULE-SET,ru,")
 
-    assert spy_index < blocked_index < ru_index
+    assert spy_index < ru_index
     assert rules[spy_index].endswith(",REJECT")
-    assert rules[blocked_index].endswith(",proxy")
     assert rules[ru_index].endswith(",DIRECT")
 
-    # Final catch-all is MATCH,proxy (default unmatched -> proxy for lite).
+    # Final catch-all is MATCH,proxy (default unmatched -> proxy for lite,
+    # which also covers the server-only "blocked" domains/IPs).
     assert rules[-1] == "MATCH,proxy"
 
     provider_names = set(document.get("rule-providers", {}))
-    for excluded in ("ads", "trackers", "malware", "phishing"):
+    for excluded in ("ads", "blocked", "trackers", "malware", "phishing"):
         assert excluded not in provider_names
 
 
@@ -492,7 +485,18 @@ def _cidr_capable_canonical_categories() -> frozenset[str]:
         for source in registry.sources:
             object_paths: dict[str, tuple[Path, ...]] = {}
             for category in source.expected_categories:
-                if source.input_type == "plain_text":
+                if source.input_type == "builtin":
+                    # Built-in sources (the static private-network CIDR
+                    # list) are parsed via the plain_text path (see
+                    # parsers.py::parse_source) but carry no real URL to
+                    # sniff for "ipset" -- write real CIDR content
+                    # directly so this category is correctly classified
+                    # as CIDR-capable, matching its actual (non-fixture)
+                    # content.
+                    path = root / f"{source.name.replace('/', '_')}-{category}.lst"
+                    path.write_text("203.0.113.0/24\n", encoding="utf-8")
+                    object_paths[category] = (path,)
+                elif source.input_type == "plain_text":
                     path = root / f"{source.name.replace('/', '_')}-{category}.lst"
                     # Content shape (not the category name) is what the real
                     # parser (_parse_line) uses to decide domain vs CIDR, so

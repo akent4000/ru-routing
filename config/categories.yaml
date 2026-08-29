@@ -1,9 +1,9 @@
 mappings:
   - {source: aireps/geosite, source_category: category-ru, canonical_category: ru-global, datasets: [server], tier: trusted_direct}
-  - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru-blocked, canonical_category: blocked, datasets: [lite, server], tier: explicit_blocked}
+  - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru-blocked, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru-available-only-inside, canonical_category: ru-inside, datasets: [lite, server], tier: trusted_direct}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: category-ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
-  - {source: runetfreedom/russia-v2ray-rules-dat, source_category: category-ads-all, canonical_category: ads, datasets: [lite, server], tier: thematic}
+  - {source: runetfreedom/russia-v2ray-rules-dat, source_category: category-ads-all, canonical_category: ads, datasets: [server], tier: thematic}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: category-public-tracker, canonical_category: trackers, datasets: [lite, server], tier: thematic}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: win-spy, canonical_category: spy, datasets: [lite, server], tier: deny}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: google, canonical_category: google, datasets: [server], tier: thematic}
@@ -13,6 +13,8 @@ mappings:
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: meta, canonical_category: meta, datasets: [server], tier: thematic}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: github, canonical_category: github, datasets: [server], tier: thematic}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: openai, canonical_category: ai, datasets: [server], tier: thematic}
-  - {source: jutsu-dev/ru-route-lists, source_category: blocked-domains, canonical_category: blocked, datasets: [lite, server], tier: explicit_blocked}
-  - {source: jutsu-dev/ru-route-lists, source_category: blocked-cidrs, canonical_category: blocked, datasets: [lite, server], tier: explicit_blocked}
+  - {source: jutsu-dev/ru-route-lists, source_category: blocked-domains, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
+  - {source: jutsu-dev/ru-route-lists, source_category: blocked-cidrs, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
   - {source: Loyalsoldier/v2ray-rules-dat, source_category: ru, canonical_category: ru-geoip, datasets: [server], tier: trusted_direct}
+  - {source: itdoginfo/allow-domains, source_category: russia-outside, canonical_category: ru-inside, datasets: [lite, server], tier: trusted_direct}
+  - {source: builtin/private-networks, source_category: private, canonical_category: private, datasets: [lite, server], tier: trusted_direct}

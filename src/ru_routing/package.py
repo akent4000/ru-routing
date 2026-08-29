@@ -32,7 +32,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from .config import SourceRemovalMigration, ThresholdPolicy
+from .config import CategoryScopeMigration, SourceRemovalMigration, ThresholdPolicy
 from .fetch import FetchedSource
 from .render import representation_report
 from .resolve import ConflictReport, ResolvedBuild
@@ -262,13 +262,27 @@ def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
         previous_policy=previous_policy,
         current_policy=current_policy,
     )
+    category_scope_change = _approved_category_scope_change(
+        previous_policy=previous_policy,
+        current_policy=current_policy,
+        migrations=metadata.thresholds.category_scope_migrations,
+    )
+    reset_category_keys = frozenset(
+        (source_removal.reset_category_keys if source_removal else frozenset())
+        | (
+            category_scope_change.reset_category_keys
+            if category_scope_change
+            else frozenset()
+        )
+    )
+    reset_size = bool(source_removal and source_removal.reset_size) or bool(
+        category_scope_change and category_scope_change.reset_size
+    )
     _check_anomalies(
         metadata,
         previous=previous,
-        reset_category_keys=(
-            source_removal.reset_category_keys if source_removal else frozenset()
-        ),
-        reset_size=source_removal.reset_size if source_removal else False,
+        reset_category_keys=reset_category_keys,
+        reset_size=reset_size,
     )
 
     if not changed:
@@ -353,6 +367,23 @@ def _approved_source_removal(
         if migration.expected_previous_policy_fingerprint == previous_policy
         and migration.expected_current_policy_fingerprint == current_policy
         and migration.removed_source_ids == removed_names
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _approved_category_scope_change(
+    *,
+    previous_policy: object,
+    current_policy: str,
+    migrations: tuple[CategoryScopeMigration, ...],
+) -> CategoryScopeMigration | None:
+    matches = [
+        migration
+        for migration in migrations
+        if migration.expected_previous_policy_fingerprint == previous_policy
+        and migration.expected_current_policy_fingerprint == current_policy
     ]
     if len(matches) != 1:
         return None

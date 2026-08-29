@@ -274,7 +274,10 @@ def parse_source(
     """Yield category-aware rules according to a declared source layout."""
 
     _validate_paths(source, paths)
-    if source.input_type == "plain_text":
+    if source.input_type in {"plain_text", "builtin"}:
+        # "builtin" sources (e.g. the static private-network CIDR list)
+        # are content-identical to plain_text: one rule per non-comment
+        # line, no fetch involved. Reuse the same parser.
         if source.layout not in {"per_category_urls", "release_assets"}:
             raise ParseError(f"{source.name}: invalid plain-text source layout")
         yield from _parse_plain_text(source, paths)

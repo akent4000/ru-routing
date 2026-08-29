@@ -328,6 +328,41 @@ def test_mapping_membership_datasets_control_lite_and_server_category_entries():
     assert entries(build.server, "video") == {("domain", "video.example")}
 
 
+def test_server_only_blocker_still_subtracts_from_a_lite_published_category():
+    """A higher-tier category absent from lite's `datasets:` scope (e.g.
+    `blocked` is server-only) must still take conflict-resolution ownership
+    over a lower-tier category that IS published in lite (`ru`) -- not just
+    over categories published in the same dataset as the blocker. Dropping
+    this would make lite's resolved `ru` a strict superset of server's
+    resolved `ru` (server still subtracts `blocked` from its own `ru`),
+    violating assert_server_superset. Regression test for that bug."""
+
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "danger.example", "ru", source="direct"),
+            rule(RuleKind.DOMAIN, "danger.example", "blocked", source="blocklist"),
+        ),
+        policy_with_membership_datasets(
+            {
+                ("direct", "ru"): ("ru", PolicyTier.TRUSTED_DIRECT, {"lite", "server"}),
+                ("blocklist", "blocked"): (
+                    "blocked",
+                    PolicyTier.EXPLICIT_BLOCKED,
+                    {"server"},
+                ),
+            }
+        ),
+    )
+
+    assert "blocked" not in build.lite.categories
+    assert entries(build.lite, "ru") == set()
+    assert entries(build.server, "ru") == set()
+    # No AnomalyError-triggering surprise: this call already ran inside
+    # resolve_datasets and raising ResolutionError would have failed the
+    # test above it, but assert explicitly for clarity/documentation.
+    assert_server_superset(build.lite, build.server)
+
+
 def test_resolver_rejects_shared_category_missing_a_lite_entry_on_server():
     policy = policy_with_membership_datasets(
         {
@@ -690,7 +725,7 @@ def test_indexed_resolution_matches_pairwise_reference_on_random_data():
             category = f"cat{i}"
             categorized[category] = tuple(_random_entries(rng, 40))
 
-        indexes = _build_blocker_indexes(dataset, categorized, tiers)
+        indexes = _build_blocker_indexes(dataset, categorized, categorized, tiers)
 
         expected_resolved = _reference_resolve_categories(dataset, categorized, tiers)
         actual_resolved = _resolve_categories(categorized, indexes)
@@ -756,7 +791,7 @@ def test_indexed_cidr_conflicts_match_pairwise_reference_on_random_data():
         categorized: dict[str, tuple[RuleEntry, ...]] = {
             f"cat{i}": tuple(random_cidrs(rng, 200)) for i in range(4)
         }
-        indexes = _build_blocker_indexes(dataset, categorized, tiers)
+        indexes = _build_blocker_indexes(dataset, categorized, categorized, tiers)
 
         expected = set()
         for hc, hes in categorized.items():

@@ -69,3 +69,31 @@ sources:
       redistribution_reviewed: true
     freshness:
       max_age_hours: 48
+  - name: itdoginfo/allow-domains
+    url: https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst
+    input_type: plain_text
+    layout: per_category_urls
+    required: true
+    expected_categories: [russia-outside]
+    category_locations:
+      russia-outside: https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst
+    attribution: itdoginfo/allow-domains contributors
+    license:
+      spdx: NOASSERTION
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 168
+  - name: builtin/private-networks
+    url: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+    input_type: builtin
+    layout: per_category_urls
+    required: true
+    expected_categories: [private]
+    category_locations:
+      private: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+    attribution: "RFC 1918/3927/4193/6598 private, loopback, and link-local address ranges, matching v2fly/geoip's built-in geoip:private set exactly. Not fetched over the network -- built into the pipeline (see src/ru_routing/fetch.py); the url above is a documentation pointer to the IANA special-purpose registry, not a fetch target."
+    license:
+      spdx: CC0-1.0
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 8760

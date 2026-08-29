@@ -51,7 +51,6 @@ _LIVE_BINARY_CATEGORIES = {
 }
 UNVERIFIED_LICENSE_SOURCES = {
     "hydraponique/roscomvpn-geoip",
-    "itdoginfo/allow-domains",
 }
 
 

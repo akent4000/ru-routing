@@ -1,7 +1,7 @@
 {
   "_comment": "RU routing pipeline - Xray lite example. Placeholder tokens {{VERSION}} and {{CDN_BASE}} are substituted at build time by ru_routing.render.render_examples. node-example is a documented placeholder outbound tag: replace its address/credentials with a real inter-node deployment before use.",
   "_version": "{{VERSION}}",
-  "_default_outbound_comment": "5. Unmatched traffic to PROXY. Xray uses the first entry of 'outbounds' as the default when no routing rule matches, so 'proxy' is declared first here: lite protects a client behind a VPN, so unrecognized destinations must not silently bypass the tunnel.",
+  "_default_outbound_comment": "4. Unmatched traffic to PROXY. Xray uses the first entry of 'outbounds' as the default when no routing rule matches, so 'proxy' is declared first here: lite protects a client behind a VPN, so unrecognized destinations must not silently bypass the tunnel. This is also where the (server-only) 'blocked' domains/IPs land, since lite no longer carries an explicit blocked rule-set -- proxying by default already covers them.",
   "outbounds": [
     {
       "tag": "proxy",
@@ -42,19 +42,7 @@
         "outboundTag": "block"
       },
       {
-        "_comment": "3. Explicit Russian blocked domains/IPs to PROXY (prevents unsafe DIRECT matches).",
-        "type": "field",
-        "domain": ["ext:geosite-lite.dat:blocked"],
-        "outboundTag": "proxy"
-      },
-      {
-        "_comment": "3. Explicit Russian blocked CIDRs to PROXY.",
-        "type": "field",
-        "ip": ["ext:geoip-lite.dat:blocked"],
-        "outboundTag": "proxy"
-      },
-      {
-        "_comment": "4. Trusted RU and Russia-only traffic to DIRECT.",
+        "_comment": "3. Trusted RU and Russia-only traffic to DIRECT.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside"],
         "outboundTag": "direct"

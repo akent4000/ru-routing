@@ -18,6 +18,8 @@ INITIAL_SOURCE_IDS = frozenset(
         "runetfreedom/russia-v2ray-rules-dat",
         "jutsu-dev/ru-route-lists",
         "Loyalsoldier/v2ray-rules-dat",
+        "itdoginfo/allow-domains",
+        "builtin/private-networks",
     }
 )
 
@@ -25,6 +27,7 @@ SUPPORTED_SOURCE_LAYOUTS = {
     "geoip_dat": frozenset({"single_artifact"}),
     "geosite_dat": frozenset({"single_artifact"}),
     "plain_text": frozenset({"per_category_urls", "release_assets"}),
+    "builtin": frozenset({"per_category_urls"}),
 }
 
 
@@ -215,16 +218,45 @@ class SourceRemovalMigration:
 
 
 @dataclass(frozen=True)
+class CategoryScopeMigration:
+    """Reviewed anomaly reset for one exact policy transition that reshapes
+    a canonical category's dataset scope (e.g. moving a category out of
+    ``lite``) without removing any upstream source.
+
+    Distinct from ``SourceRemovalMigration``: that mechanism requires the
+    current source set to be a strict subset of the previous one (an actual
+    upstream removed from ``sources.yaml``). This one has no such
+    precondition -- it only requires both policy fingerprints to match
+    exactly, since a pure ``categories.yaml`` ``datasets:`` scope edit
+    changes the policy fingerprint but touches no source.
+    """
+
+    expected_previous_policy_fingerprint: str
+    expected_current_policy_fingerprint: str
+    reset_category_keys: frozenset[str]
+    reset_size: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "reset_category_keys", frozenset(self.reset_category_keys)
+        )
+
+
+@dataclass(frozen=True)
 class ThresholdPolicy:
     """Version-controlled anomaly bounds and reviewed baseline migrations."""
 
     category_count_change_ratio: float
     size_change_ratio: float
     source_removal_migrations: tuple[SourceRemovalMigration, ...] = ()
+    category_scope_migrations: tuple[CategoryScopeMigration, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "source_removal_migrations", tuple(self.source_removal_migrations)
+        )
+        object.__setattr__(
+            self, "category_scope_migrations", tuple(self.category_scope_migrations)
         )
 
 
@@ -517,6 +549,26 @@ def _sha256_fingerprint(value: Any, context: str) -> str:
     return fingerprint
 
 
+def _reset_category_keys(value: Any, context: str) -> frozenset[str]:
+    reset_category_keys = _unique_string_set(value, context)
+    for category_key in reset_category_keys:
+        dataset, separator, category = category_key.partition(":")
+        if (
+            separator != ":"
+            or dataset not in {"lite", "server"}
+            or not category
+            or ":" in category
+        ):
+            raise ConfigError(f"{context} contains invalid key {category_key!r}")
+    return reset_category_keys
+
+
+def _reset_size(value: Any, context: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{context} must be a boolean")
+    return value
+
+
 def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]:
     if not isinstance(value, list):
         raise ConfigError("source_removal_migrations must be a list")
@@ -553,24 +605,10 @@ def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]
                 f"{context}.removed_source_ids duplicates another migration"
             )
         seen_removed_sets.add(removed_source_ids)
-        reset_category_keys = _unique_string_set(
+        reset_category_keys = _reset_category_keys(
             raw_migration["reset_category_keys"], f"{context}.reset_category_keys"
         )
-        for category_key in reset_category_keys:
-            dataset, separator, category = category_key.partition(":")
-            if (
-                separator != ":"
-                or dataset not in {"lite", "server"}
-                or not category
-                or ":" in category
-            ):
-                raise ConfigError(
-                    f"{context}.reset_category_keys contains invalid key "
-                    f"{category_key!r}"
-                )
-        reset_size = raw_migration["reset_size"]
-        if not isinstance(reset_size, bool):
-            raise ConfigError(f"{context}.reset_size must be a boolean")
+        reset_size = _reset_size(raw_migration["reset_size"], f"{context}.reset_size")
         migrations.append(
             SourceRemovalMigration(
                 expected_previous_policy_fingerprint=(
@@ -580,6 +618,61 @@ def _source_removal_migrations(value: Any) -> tuple[SourceRemovalMigration, ...]
                     expected_current_policy_fingerprint
                 ),
                 removed_source_ids=removed_source_ids,
+                reset_category_keys=reset_category_keys,
+                reset_size=reset_size,
+            )
+        )
+    return tuple(migrations)
+
+
+def _category_scope_migrations(value: Any) -> tuple[CategoryScopeMigration, ...]:
+    if not isinstance(value, list):
+        raise ConfigError("category_scope_migrations must be a list")
+    migrations: list[CategoryScopeMigration] = []
+    seen_fingerprint_pairs: set[tuple[str, str]] = set()
+    for index, raw_migration in enumerate(value):
+        context = f"category_scope_migrations[{index}]"
+        if not isinstance(raw_migration, dict):
+            raise ConfigError(f"{context} must be a mapping")
+        _require_fields(
+            raw_migration,
+            {
+                "expected_previous_policy_fingerprint",
+                "expected_current_policy_fingerprint",
+                "reset_category_keys",
+                "reset_size",
+            },
+            context,
+        )
+        expected_previous_policy_fingerprint = _sha256_fingerprint(
+            raw_migration["expected_previous_policy_fingerprint"],
+            f"{context}.expected_previous_policy_fingerprint",
+        )
+        expected_current_policy_fingerprint = _sha256_fingerprint(
+            raw_migration["expected_current_policy_fingerprint"],
+            f"{context}.expected_current_policy_fingerprint",
+        )
+        fingerprint_pair = (
+            expected_previous_policy_fingerprint,
+            expected_current_policy_fingerprint,
+        )
+        if fingerprint_pair in seen_fingerprint_pairs:
+            raise ConfigError(
+                f"{context} duplicates another migration's fingerprint pair"
+            )
+        seen_fingerprint_pairs.add(fingerprint_pair)
+        reset_category_keys = _reset_category_keys(
+            raw_migration["reset_category_keys"], f"{context}.reset_category_keys"
+        )
+        reset_size = _reset_size(raw_migration["reset_size"], f"{context}.reset_size")
+        migrations.append(
+            CategoryScopeMigration(
+                expected_previous_policy_fingerprint=(
+                    expected_previous_policy_fingerprint
+                ),
+                expected_current_policy_fingerprint=(
+                    expected_current_policy_fingerprint
+                ),
                 reset_category_keys=reset_category_keys,
                 reset_size=reset_size,
             )
@@ -597,6 +690,7 @@ def load_thresholds(path: Path) -> ThresholdPolicy:
             "category_count_change_ratio",
             "size_change_ratio",
             "source_removal_migrations",
+            "category_scope_migrations",
         },
         "threshold policy",
     )
@@ -607,5 +701,8 @@ def load_thresholds(path: Path) -> ThresholdPolicy:
         size_change_ratio=_ratio(document["size_change_ratio"], "size_change_ratio"),
         source_removal_migrations=_source_removal_migrations(
             document["source_removal_migrations"]
+        ),
+        category_scope_migrations=_category_scope_migrations(
+            document["category_scope_migrations"]
         ),
     )

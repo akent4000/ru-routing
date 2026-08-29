@@ -85,26 +85,50 @@ def resolve_datasets(
     matches them.
     """
 
-    categorized = _categorize(rules, policy)
+    categorized, blocker_pool = _categorize(rules, policy)
+    # tiers spans every canonical category in the blocker pool, not just
+    # the categories a given dataset publishes -- a blocker category
+    # (e.g. server-only "blocked") must resolve its tier even when it is
+    # absent from a dataset's own publication set.
+    tiers = {name: policy.canonical_category(name).tier for name in blocker_pool}
+
+    # Phase 1 (both datasets): resolve each dataset's publication set
+    # against the pre-resolution blocker pool, and report "before"
+    # conflicts from that same pool.
     resolved_datasets: dict[str, dict[str, tuple[RuleEntry, ...]]] = {}
     conflicts_before: list[Conflict] = []
-    conflicts_after: list[Conflict] = []
     for dataset in ("lite", "server"):
         entries = categorized[dataset]
-        tiers = {name: policy.canonical_category(name).tier for name in entries}
-        # Build the blocker indexes once from the pre-resolution entries and
-        # reuse them for both the "before" conflict report and the actual
-        # resolution pass -- both read the same source data, so rebuilding
-        # per call would double index-construction cost for no benefit.
-        # "after" is a separate build since resolution changes the entries.
-        before_indexes = _build_blocker_indexes(dataset, entries, tiers)
-        before = _conflicts(dataset, entries, before_indexes)
-        resolved = _resolve_categories(entries, before_indexes)
-        after_indexes = _build_blocker_indexes(dataset, resolved, tiers)
-        after = _conflicts(dataset, resolved, after_indexes)
-        resolved_datasets[dataset] = resolved
-        conflicts_before.extend(before)
-        conflicts_after.extend(after)
+        # Built once and reused for both the "before" conflict report and
+        # the resolution pass -- both read the same pre-resolution pool, so
+        # rebuilding per call would double index-construction cost for no
+        # benefit.
+        before_indexes = _build_blocker_indexes(dataset, entries, blocker_pool, tiers)
+        conflicts_before.extend(_conflicts(dataset, entries, before_indexes))
+        resolved_datasets[dataset] = _resolve_categories(entries, before_indexes)
+
+    # Rebuild the blocker pool from the phase-1 *resolved* output before
+    # computing "after" conflicts: a blocker category's own entries may
+    # have changed during its dataset's resolution (e.g. server's
+    # "blocked" is itself subtracted against "spy"), and a category
+    # published in both datasets must merge both resolved copies so
+    # neither dataset's "after" pass sees a stale blocker. Per canonical
+    # category, the union of every dataset's resolved entries is exactly
+    # the "still-published-somewhere, post-resolution" blocker set.
+    resolved_pool: dict[str, tuple[RuleEntry, ...]] = {}
+    for dataset_categories in resolved_datasets.values():
+        for name, entries in dataset_categories.items():
+            resolved_pool[name] = tuple(
+                dict.fromkeys((*resolved_pool.get(name, ()), *entries))
+            )
+
+    # Phase 2 (both datasets): report "after" conflicts against the
+    # resolved pool.
+    conflicts_after: list[Conflict] = []
+    for dataset in ("lite", "server"):
+        resolved = resolved_datasets[dataset]
+        after_indexes = _build_blocker_indexes(dataset, resolved, resolved_pool, tiers)
+        conflicts_after.extend(_conflicts(dataset, resolved, after_indexes))
 
     sorted_before = tuple(sorted(conflicts_before, key=_conflict_key))
     sorted_after = tuple(sorted(conflicts_after, key=_conflict_key))
@@ -146,12 +170,35 @@ def assert_server_superset(lite: Dataset, server: Dataset) -> None:
             )
 
 
+_PublicationSets = dict[str, dict[str, tuple[RuleEntry, ...]]]
+_BlockerPool = dict[str, tuple[RuleEntry, ...]]
+
+
 def _categorize(
     rules: Iterable[RuleEntry], policy: CategoryPolicy
-) -> dict[str, dict[str, tuple[RuleEntry, ...]]]:
+) -> tuple[_PublicationSets, _BlockerPool]:
+    """Group normalized rules into per-dataset publication sets, plus a
+    dataset-independent "blocker pool" of every canonical category's full
+    entry set.
+
+    A canonical category's ``datasets:`` scope controls what gets
+    *published* in each dataset's output -- it must not also gate whether
+    that category can still take conflict-resolution ownership over a
+    higher-tier category shadowing a *different*, published category. For
+    example ``blocked`` (EXPLICIT_BLOCKED) is now server-only in
+    ``datasets:``, but must still subtract its entries from lite's ``ru``
+    (TRUSTED_DIRECT): dropping that would make lite's resolved ``ru`` a
+    strict superset of server's resolved ``ru`` (server still subtracts
+    ``blocked``), violating the assert_server_superset invariant. The
+    blocker pool is the fix: built once from every mapping regardless of
+    its ``datasets:`` scope, and used as the blocker source in
+    ``_build_blocker_indexes`` instead of the per-dataset publication set.
+    """
+
     grouped: dict[
         str, dict[str, dict[tuple[RuleKind, str, frozenset[str]], _Provenance]]
     ] = {"lite": {}, "server": {}}
+    pool: dict[str, dict[tuple[RuleKind, str, frozenset[str]], _Provenance]] = {}
     for rule in rules:
         for source, source_category in sorted(rule.memberships):
             try:
@@ -161,15 +208,21 @@ def _categorize(
                     f"no category policy mapping for {source}:{source_category}"
                 ) from error
             canonical = policy.canonical_category(mapping.canonical_category)
+            key = (rule.kind, rule.value, rule.attributes)
+            pool_category = pool.setdefault(canonical.name, {})
+            pool_provenance = pool_category.setdefault(key, _Provenance())
+            pool_provenance.sources.add(source)
+            pool_provenance.memberships.add((source, source_category))
             for dataset in mapping.datasets:
                 category = grouped[dataset].setdefault(canonical.name, {})
-                key = (rule.kind, rule.value, rule.attributes)
                 provenance = category.setdefault(key, _Provenance())
                 provenance.sources.add(source)
                 provenance.memberships.add((source, source_category))
 
-    return {
-        dataset: {
+    def _materialize(
+        categories: dict[str, dict[tuple[RuleKind, str, frozenset[str]], _Provenance]]
+    ) -> dict[str, tuple[RuleEntry, ...]]:
+        return {
             name: tuple(
                 RuleEntry(
                     kind=kind,
@@ -184,8 +237,11 @@ def _categorize(
             )
             for name, entries in sorted(categories.items())
         }
-        for dataset, categories in grouped.items()
-    }
+
+    return (
+        {dataset: _materialize(categories) for dataset, categories in grouped.items()},
+        _materialize(pool),
+    )
 
 
 @dataclass
@@ -255,11 +311,20 @@ class _BlockerIndex:
 
 def _build_blocker_indexes(
     dataset: str,
-    categorized: dict[str, tuple[RuleEntry, ...]],
+    lower_categories: Iterable[str],
+    blocker_source: dict[str, tuple[RuleEntry, ...]],
     tiers: dict[str, PolicyTier],
 ) -> dict[str, _BlockerIndex]:
-    """Build one ``_BlockerIndex`` per category, sharing builds across
-    categories whose blocker set is identical.
+    """Build one ``_BlockerIndex`` per category in ``lower_categories``,
+    sharing builds across categories whose blocker set is identical.
+
+    Blockers are drawn from ``blocker_source`` -- the dataset-independent
+    "blocker pool" of every canonical category's full entry set (see
+    ``_categorize``), not the dataset's own publication set -- so a
+    higher-tier category can take conflict-resolution ownership over a
+    lower-tier one even when the higher-tier category itself is not
+    published in this dataset (e.g. ``blocked`` is server-only but must
+    still subtract from lite's ``ru``).
 
     ``_takes_ownership(dataset, blocker_tier, tier)`` depends only on
     ``tier`` (and the fixed ``dataset``), so every category at the same
@@ -274,7 +339,7 @@ def _build_blocker_indexes(
 
     indexes_by_tier: dict[PolicyTier, _BlockerIndex] = {}
     indexes: dict[str, _BlockerIndex] = {}
-    for category in categorized:
+    for category in lower_categories:
         tier = tiers[category]
         if tier in indexes_by_tier:
             indexes[category] = indexes_by_tier[tier]
@@ -283,7 +348,7 @@ def _build_blocker_indexes(
         suffix_trie: dict = {}
         fail_closed: list[_Blocker] = []
         cidr_by_version: dict[int, list[_Blocker]] = {}
-        for blocker_category, blocker_entries in categorized.items():
+        for blocker_category, blocker_entries in blocker_source.items():
             if not _takes_ownership(dataset, tiers[blocker_category], tier):
                 continue
             for blocker in blocker_entries:

@@ -350,3 +350,59 @@ def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path)
 
     with pytest.raises(FetchError, match="aireps/geosite"):
         fetch_all(SourceRegistry((aireps,)), tmp_path / "inputs", client(handler))
+
+
+def _builtin_source(
+    name="builtin/private-networks",
+    *,
+    expected_categories=("private",),
+):
+    return SourceDefinition(
+        name=name,
+        url="https://example.test/documentation-only",
+        input_type="builtin",
+        layout="per_category_urls",
+        required=True,
+        expected_categories=expected_categories,
+        category_locations={
+            category: ("https://example.test/documentation-only",)
+            for category in expected_categories
+        },
+        attribution="Example builtin contributors",
+        license=LicenseMetadata("CC0-1.0", True),
+        freshness=FreshnessRule(max_age_hours=8760),
+    )
+
+
+def test_builtin_source_is_fetched_without_any_network_request(tmp_path):
+    def handler(request):
+        raise AssertionError(
+            f"builtin source must not make any network request, got {request.url}"
+        )
+
+    fetched = fetch_all(
+        SourceRegistry((_builtin_source(),)), tmp_path / "inputs", client(handler)
+    )
+
+    assert len(fetched) == 1
+    item = fetched[0]
+    assert item.observed_freshness_lag_hours is None
+    assert set(item.object_paths) == {"private"}
+    (path,) = item.object_paths["private"]
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8").strip()
+
+
+def test_builtin_source_resolved_revision_is_stable_across_fetches(tmp_path):
+    def handler(request):
+        raise AssertionError("builtin source must not make any network request")
+
+    first = fetch_all(
+        SourceRegistry((_builtin_source(),)), tmp_path / "inputs-1", client(handler)
+    )
+    second = fetch_all(
+        SourceRegistry((_builtin_source(),)), tmp_path / "inputs-2", client(handler)
+    )
+
+    assert first[0].resolved_revision == second[0].resolved_revision
+    assert first[0].sha256 == second[0].sha256

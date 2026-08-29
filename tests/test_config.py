@@ -11,12 +11,11 @@ EXPECTED_SOURCES = {
     "runetfreedom/russia-v2ray-rules-dat",
     "jutsu-dev/ru-route-lists",
     "Loyalsoldier/v2ray-rules-dat",
+    "itdoginfo/allow-domains",
+    "builtin/private-networks",
 }
 
-UNVERIFIED_LICENSE_SOURCES = (
-    "hydraponique/roscomvpn-geoip",
-    "itdoginfo/allow-domains",
-)
+UNVERIFIED_LICENSE_SOURCES = ("hydraponique/roscomvpn-geoip",)
 
 
 @pytest.mark.parametrize("source_name", UNVERIFIED_LICENSE_SOURCES)
@@ -87,9 +86,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "runetfreedom/russia-v2ray-rules-dat:category-ru"
     ].datasets == frozenset({"lite", "server"})
     assert policy.canonical_category("blocked").tier.value == "explicit_blocked"
-    assert policy.canonical_category("blocked").datasets == frozenset(
-        {"lite", "server"}
-    )
+    assert policy.canonical_category("blocked").datasets == frozenset({"server"})
     assert all(
         set(source.category_locations) == set(source.expected_categories)
         for source in registry.sources
@@ -109,7 +106,14 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     assert "48 hours" in readme
     assert thresholds.category_count_change_ratio == 0.5
     (source_removal,) = thresholds.source_removal_migrations
-    assert source_removal.removed_source_ids == frozenset(UNVERIFIED_LICENSE_SOURCES)
+    # Historical migration record: fixes the exact set of sources removed
+    # at that past transition. itdoginfo/allow-domains was later
+    # re-included (see config.py's INITIAL_SOURCE_IDS and the design doc's
+    # 2026-08-29 reversal note) -- this recorded event describes what
+    # happened at the time, independent of the current registry state.
+    assert source_removal.removed_source_ids == frozenset(
+        {"hydraponique/roscomvpn-geoip", "itdoginfo/allow-domains"}
+    )
     assert source_removal.reset_category_keys == frozenset(
         {
             "lite:ru",
@@ -143,7 +147,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
+        "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
     )
 
     with pytest.raises(FrozenInstanceError):
