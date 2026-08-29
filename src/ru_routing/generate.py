@@ -6,10 +6,11 @@ import dataclasses
 import hashlib
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import yaml
 
@@ -146,6 +147,7 @@ def generate_all(
     previous = destination.with_name(f".{destination.name}.previous")
     _remove_tree(stage)
     stage.mkdir(parents=True)
+    print(f"ru-routing: generating artifacts into {stage}...", flush=True)
     try:
         render_raw(rendered, stage)
         inputs = stage / ".compiler-inputs"
@@ -154,6 +156,12 @@ def generate_all(
         mihomo = stage / "mihomo"
         xray.mkdir()
 
+        # xray's two datasets share the same "geoip.dat" output path (the
+        # lite variant is produced by renaming the shared compiler output to
+        # "geoip-lite.dat" afterward), so unlike sing-box/mihomo -- which
+        # write to per-dataset subdirectories -- the two datasets cannot
+        # compile concurrently without a write race. Keep this loop
+        # sequential.
         for dataset_name, dataset in _datasets(rendered):
             _compile_xray(dataset_name, dataset, stage, inputs, xray, tools)
         for dataset_name, dataset in _datasets(rendered):
@@ -168,6 +176,11 @@ def generate_all(
                 for path in stage.rglob("*")
                 if path.is_file()
             )
+        )
+        print(
+            f"ru-routing: generated {len(relative_paths)} artifacts, "
+            f"publishing to {destination}...",
+            flush=True,
         )
         _publish_tree(stage, destination, previous)
         return GeneratedArtifacts(relative_paths)
@@ -184,6 +197,7 @@ def _compile_xray(
     output: Path,
     tools: NativeTools,
 ) -> None:
+    print(f"ru-routing: compiling xray artifacts for {dataset_name}...", flush=True)
     source_root = inputs / "xray" / dataset_name
     geosite_source = source_root / "geosite"
     render_dlc_sources(dataset, geosite_source)
@@ -225,7 +239,15 @@ def _compile_sing_box(
 ) -> None:
     output = output_root / dataset_name
     output.mkdir(parents=True)
-    for category_name, category in sorted(dataset.categories.items()):
+    categories = sorted(dataset.categories.items())
+    print(
+        f"ru-routing: compiling sing-box rule-sets for {dataset_name} "
+        f"({len(categories)} categories)...",
+        flush=True,
+    )
+
+    def _compile_one(item: tuple[str, Category]) -> None:
+        category_name, category = item
         name = _safe_category_name(category_name)
         source = output / f"{name}.json"
         source.write_text(render_singbox_json(category), encoding="utf-8", newline="\n")
@@ -244,6 +266,9 @@ def _compile_sing_box(
             binary,
             "sing-box",
         )
+        print(f"ru-routing:   sing-box {dataset_name}/{name} done", flush=True)
+
+    _run_parallel(categories, _compile_one)
 
 
 def _compile_mihomo(
@@ -258,14 +283,21 @@ def _compile_mihomo(
     compiler_inputs = inputs / "mihomo" / dataset_name
     output.mkdir(parents=True)
     compiler_inputs.mkdir(parents=True)
-    for category_name, category in sorted(dataset.categories.items()):
+    categories = sorted(dataset.categories.items())
+    print(
+        f"ru-routing: compiling mihomo rule-sets for {dataset_name} "
+        f"({len(categories)} categories)...",
+        flush=True,
+    )
+
+    def _compile_one(item: tuple[str, Category]) -> None:
+        category_name, category = item
         name = _safe_category_name(category_name)
         public_source = output / f"{name}.yaml"
         public_source.write_text(
             render_mihomo_yaml(category), encoding="utf-8", newline="\n"
         )
-        converter_inputs = _mihomo_converter_inputs(category)
-        for behavior, values in converter_inputs:
+        for behavior, values in _mihomo_converter_inputs(category):
             suffix = f"-{behavior}"
             source = compiler_inputs / f"{name}{suffix}.yaml"
             binary = output / f"{name}{suffix}.mrs"
@@ -293,6 +325,9 @@ def _compile_mihomo(
                 binary,
                 "mihomo",
             )
+        print(f"ru-routing:   mihomo {dataset_name}/{name} done", flush=True)
+
+    _run_parallel(categories, _compile_one)
 
 
 def _mihomo_converter_inputs(
@@ -334,6 +369,51 @@ def mihomo_mrs_behaviors(category: Category) -> tuple[str, ...]:
     if category_is_cidr_capable(category):
         behaviors.append("ipcidr")
     return tuple(behaviors)
+
+
+_T = TypeVar("_T")
+
+
+def _worker_count(item_count: int) -> int:
+    """Bound the thread pool to a sane size for I/O-bound subprocess calls.
+
+    Each work item blocks its worker thread on a native-compiler subprocess
+    rather than on CPU work in the parent process, so a pool somewhat larger
+    than the CPU count keeps more subprocesses in flight without
+    over-subscribing the parent's own (light) bookkeeping work.
+    """
+
+    if item_count <= 1:
+        return 1
+    return max(1, min(item_count, (os.cpu_count() or 4) * 2))
+
+
+def _run_parallel(items: Sequence[_T], work: Callable[[_T], None]) -> None:
+    """Run ``work`` over ``items`` on a bounded thread pool.
+
+    Subprocess calls release the GIL while waiting on the child process, so
+    a thread pool shrinks wall-clock time for the large sequential chains of
+    independent sing-box/mihomo/xray compiler invocations. The first
+    exception raised by any worker propagates with its original type intact
+    (``ThreadPoolExecutor`` futures preserve the raised exception object), so
+    callers' existing ``except Exception`` cleanup handles it unchanged.
+    """
+
+    if not items:
+        return
+    max_workers = _worker_count(len(items))
+    if max_workers == 1:
+        for item in items:
+            work(item)
+        return
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(work, item) for item in items]
+        try:
+            for future in as_completed(futures):
+                future.result()
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
 
 def _run_compiler(

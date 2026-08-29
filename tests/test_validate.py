@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from pathlib import Path
 
 import pytest
@@ -26,11 +27,13 @@ class FakeNativeRunner:
         self.compilations = 0
         self.nondeterministic = nondeterministic
         self.fail_mrs_read = fail_mrs_read
+        self._lock = threading.Lock()
 
     def run(self, argv, cwd):
         command = tuple(argv)
         working_directory = Path(cwd)
-        self.calls.append((command, working_directory))
+        with self._lock:
+            self.calls.append((command, working_directory))
         if (
             self.fail_mrs_read
             and command[0] == "mihomo-tool"
@@ -44,11 +47,11 @@ class FakeNativeRunner:
             if command[0] == "sing-box-tool" and "decompile" in command:
                 content = b'{"version":1,"rules":[]}\n'
             else:
-                self.compilations += 1
+                with self._lock:
+                    self.compilations += 1
+                    compilations = self.compilations
                 suffix = (
-                    str(self.compilations).encode()
-                    if self.nondeterministic
-                    else b""
+                    str(compilations).encode() if self.nondeterministic else b""
                 )
                 content = b"native-artifact\n" + suffix
             output.write_bytes(content)
