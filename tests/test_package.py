@@ -550,6 +550,41 @@ def test_package_build_checksums_are_valid_for_every_public_file(tmp_path):
         assert actual == digest
 
 
+def test_package_build_writes_index_page_with_current_artifact_links(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    artifacts = {
+        "sing-box/lite/blocked.srs": b"sing-box-lite",
+        "sing-box/server/blocked.srs": b"sing-box-server",
+        "mihomo/lite/blocked-domain.mrs": b"mihomo-lite",
+        "mihomo/server/blocked-domain.mrs": b"mihomo-server",
+    }
+    for relative, content in artifacts.items():
+        path = dist / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    manifest = package_build(dist, _metadata())
+
+    page = (dist / "index.html").read_text(encoding="utf-8")
+    assert "RU routing datasets" in page
+    assert 'href="https://routing.akent.site/manifest.json"' in page
+    assert 'href="https://routing.akent.site/SHA256SUMS"' in page
+    assert 'href="https://routing.akent.site/latest/xray/geoip.dat"' in page
+    assert (
+        'href="https://routing.akent.site/latest/sing-box/server/blocked.srs"'
+        in page
+    )
+    assert (
+        'href="https://routing.akent.site/latest/mihomo/server/blocked-domain.mrs"'
+        in page
+    )
+    assert "latest_version" in page
+    assert "<script" not in page.lower()
+    assert "index.html" in manifest.checksums
+    assert manifest.artifact_sizes["index.html"] == len(page.encode("utf-8"))
+
+
 def test_package_build_two_runs_are_byte_identical_except_built_at(tmp_path):
     dist_a = tmp_path / "dist-a"
     dist_b = tmp_path / "dist-b"

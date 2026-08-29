@@ -161,6 +161,7 @@ def publish_release(plan: PublishPlan, backend: PublishBackend) -> str:
 
         latest_overwritten = True
         _copy_specs_to_latest(backend, specs)
+        _copy_index_to_root(backend, version, plan.manifest.checksums)
 
         _write_manifest(backend, plan.manifest)
     except Exception as error:
@@ -211,6 +212,7 @@ def rollback(
 
     _validate_rollback_target(version, target_manifest)
     _copy_prefix_to_latest(backend, version, target_manifest.checksums)
+    _copy_index_to_root(backend, version, target_manifest.checksums)
     _write_manifest(backend, target_manifest)
     return version
 
@@ -241,6 +243,8 @@ def _release_object_specs(plan: PublishPlan) -> tuple[_ObjectSpec, ...]:
 
 
 def _content_type(relative: str) -> str:
+    if relative == "index.html":
+        return "text/html"
     if relative.endswith(".json"):
         return "application/json"
     return "application/octet-stream"
@@ -317,6 +321,36 @@ def _copy_prefix_to_latest(
                 f"read-back verification failed while restoring latest/{relative} "
                 f"from releases/{version}/"
             )
+
+
+def _copy_index_to_root(
+    backend: PublishBackend, version: str, checksums: Mapping[str, str]
+) -> None:
+    """Copy the release index page to the public root, verifying its bytes."""
+
+    expected_hash = checksums.get("index.html")
+    if expected_hash is None:
+        backend.delete_object("index.html")
+        return
+    source_key = f"releases/{version}/index.html"
+    try:
+        content = backend.get_object(source_key)
+    except Exception as error:
+        raise PublishError(f"cannot read immutable target {source_key}") from error
+    if hashlib.sha256(content).hexdigest() != expected_hash:
+        raise PublishError(
+            f"immutable target {source_key} does not match manifest checksum"
+        )
+    backend.put_object(
+        "index.html",
+        content,
+        content_type="text/html",
+        cache_control=_REVALIDATE_CACHE_CONTROL,
+    )
+    if backend.get_object("index.html") != content:
+        raise PublishError(
+            "read-back verification failed while writing root index.html"
+        )
 
 
 def _write_manifest(backend: PublishBackend, manifest: Manifest) -> None:
@@ -520,12 +554,24 @@ def _cleanup_failed_publication(
                     previous_manifest.release_version,
                     previous_manifest.checksums,
                 )
+                _copy_index_to_root(
+                    backend,
+                    previous_manifest.release_version,
+                    previous_manifest.checksums,
+                )
             except Exception as cleanup_error:
                 cleanup_problems.append(
                     "failed to restore /latest/* from prior version "
                     f"{previous_manifest.release_version}: {cleanup_error}"
                 )
         else:
+            try:
+                backend.delete_object("index.html")
+            except Exception as cleanup_error:
+                cleanup_problems.append(
+                    "failed to remove root index.html after an initial-release "
+                    f"failure: {cleanup_error}"
+                )
             cleanup_problems.append(
                 "/latest/* objects were overwritten but no previous manifest "
                 "was available to restore from"
