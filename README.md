@@ -58,8 +58,14 @@ claim protocol-detection parity.
 
 The public base URL is `https://routing.akent.site`.
 
+The human-readable release index is available at
+`https://routing.akent.site/`. It is a convenience page; use
+`manifest.json` as the source of truth when a consistent release snapshot is
+required.
+
 | Purpose | URL form | Cache behavior |
 | --- | --- | --- |
+| Human-readable release index | `https://routing.akent.site/` | 5 minutes, revalidate |
 | Current manifest pointer | `https://routing.akent.site/manifest.json` | 5 minutes, revalidate |
 | Current convenience object | `https://routing.akent.site/latest/<artifact>` | 5 minutes, revalidate |
 | Immutable version object | `https://routing.akent.site/releases/<version>/<artifact>` | 1 year, immutable |

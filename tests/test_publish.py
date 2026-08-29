@@ -43,7 +43,7 @@ from ru_routing.publish import (
     rollback,
 )
 
-_RELATIVE_PATHS = ("xray/geoip.dat", "sing-box/lite/example.json")
+_RELATIVE_PATHS = ("index.html", "xray/geoip.dat", "sing-box/lite/example.json")
 
 
 def _content_for(version: str, relative: str) -> bytes:
@@ -114,6 +114,7 @@ def _seed_prior_release(backend: FakeBackend, version: str) -> Manifest:
     """Populate the backend as though ``version`` was already published."""
 
     contents = (
+        ("index.html", b"<html>prior index</html>"),
         ("xray/geoip.dat", b"prior-geoip"),
         ("sing-box/lite/example.json", b"prior-singbox"),
     )
@@ -126,18 +127,27 @@ def _seed_prior_release(backend: FakeBackend, version: str) -> Manifest:
         artifact_sizes={relative: len(content) for relative, content in contents},
     )
     for relative, content in contents:
+        content_type = (
+            "text/html" if relative == "index.html" else "application/octet-stream"
+        )
         backend.put_object(
             f"releases/{version}/{relative}",
             content,
-            content_type="application/octet-stream",
+            content_type=content_type,
             cache_control="public, max-age=31536000, immutable",
         )
         backend.put_object(
             f"latest/{relative}",
             content,
-            content_type="application/octet-stream",
+            content_type=content_type,
             cache_control="public, max-age=300, must-revalidate",
         )
+    backend.put_object(
+        "index.html",
+        b"<html>prior index</html>",
+        content_type="text/html",
+        cache_control="public, max-age=300, must-revalidate",
+    )
     backend.put_object(
         "manifest.json",
         json.dumps({**manifest.to_json_dict(), "latest_version": version}).encode(
@@ -176,6 +186,23 @@ def test_publish_release_copies_latest_from_verified_tree(tmp_path):
         assert backend.get_object(key) == (plan.dist / relative).read_bytes()
         obj = backend.objects[key]
         assert obj.cache_control == "public, max-age=300, must-revalidate"
+
+
+def test_publish_release_writes_current_root_index_page_before_manifest(tmp_path):
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.29.0000-aaaaaaaa")
+
+    publish_release(plan, backend)
+
+    assert backend.get_object("index.html") == (plan.dist / "index.html").read_bytes()
+    assert backend.objects["index.html"].content_type == "text/html"
+    assert backend.objects["index.html"].cache_control == (
+        "public, max-age=300, must-revalidate"
+    )
+    keys = [key for _, key in backend.put_log]
+    assert max(i for i, key in enumerate(keys) if key == "index.html") < keys.index(
+        "manifest.json"
+    )
 
 
 def test_publish_release_writes_manifest_pointer_last(tmp_path):

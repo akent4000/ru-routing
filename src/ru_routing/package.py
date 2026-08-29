@@ -27,6 +27,7 @@ import json
 import tarfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from html import escape
 from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
@@ -38,6 +39,7 @@ from .render import representation_report
 from .resolve import ConflictReport, ResolvedBuild
 
 SCHEMA_VERSION = "1"
+_PUBLIC_BASE_URL = "https://routing.akent.site"
 
 
 class AnomalyError(RuntimeError):
@@ -470,6 +472,7 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
         raise PackagingError(f"dist directory is absent: {destination}")
 
     _install_license_material(destination)
+    _write_index_page(destination)
 
     public_files = sorted(
         path
@@ -565,6 +568,52 @@ def _install_license_material(destination: Path) -> None:
             (target / "LICENSE").write_bytes(source.read_bytes())
     except (OSError, TypeError) as error:
         raise PackagingError("packaged license material is unavailable") from error
+
+
+def _write_index_page(destination: Path) -> None:
+    """Write the static, human-readable entry point for a release."""
+
+    artifacts = sorted(
+        path.relative_to(destination).as_posix()
+        for path in (
+            list((destination / "xray").glob("*.dat"))
+            + list((destination / "sing-box" / "lite").glob("*.srs"))
+            + list((destination / "sing-box" / "server").glob("*.srs"))
+            + list((destination / "mihomo" / "lite").glob("*.mrs"))
+            + list((destination / "mihomo" / "server").glob("*.mrs"))
+        )
+        if path.is_file()
+    )
+    links = [
+        ("Release manifest", "manifest.json"),
+        ("SHA-256 checksums", "SHA256SUMS"),
+        *((relative, f"latest/{relative}") for relative in artifacts),
+    ]
+    link_items = "\n".join(
+        f'      <li><a href="{escape(f"{_PUBLIC_BASE_URL}/{path}", quote=True)}">'
+        f"{escape(label)}</a></li>"
+        for label, path in links
+    )
+    (destination / "index.html").write_text(
+        "<!doctype html>\n"
+        '<html lang="en">\n'
+        "  <head>\n"
+        '    <meta charset="utf-8">\n'
+        "    <title>RU routing datasets</title>\n"
+        "  </head>\n"
+        "  <body>\n"
+        "    <h1>RU routing datasets</h1>\n"
+        "    <p>Deterministic Russian split-routing datasets for Xray, "
+        "sing-box, and Mihomo.</p>\n"
+        "    <ul>\n"
+        f"{link_items}\n"
+        "    </ul>\n"
+        "    <p>For a consistent snapshot, read <code>latest_version</code> "
+        "from the manifest and use that immutable release.</p>\n"
+        "  </body>\n"
+        "</html>\n",
+        encoding="utf-8",
+    )
 
 
 def _manifest_kwargs(manifest: Manifest) -> dict[str, object]:
