@@ -417,6 +417,17 @@ def test_latest_upload_failure_without_prior_manifest_still_cleans_up_release(
     assert "manifest.json" not in backend.objects
 
 
+def test_initial_publish_manifest_failure_removes_root_index_page(tmp_path):
+    backend = FakeBackend()
+    plan = _plan(tmp_path, "2026.08.26.0302-88888889", previous_manifest=None)
+    backend.fail_put_key = "manifest.json"
+
+    with pytest.raises(PublishError):
+        publish_release(plan, backend)
+
+    assert "index.html" not in backend.objects
+
+
 # --- Failure/cleanup: manifest write ------------------------------------
 
 

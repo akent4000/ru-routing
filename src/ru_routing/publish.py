@@ -565,6 +565,13 @@ def _cleanup_failed_publication(
                     f"{previous_manifest.release_version}: {cleanup_error}"
                 )
         else:
+            try:
+                backend.delete_object("index.html")
+            except Exception as cleanup_error:
+                cleanup_problems.append(
+                    "failed to remove root index.html after an initial-release "
+                    f"failure: {cleanup_error}"
+                )
             cleanup_problems.append(
                 "/latest/* objects were overwritten but no previous manifest "
                 "was available to restore from"
