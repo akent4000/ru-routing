@@ -5,3 +5,7 @@ output/
 .pytest_cache/
 __pycache__/
 *.pyc
+.codegraph/
+.superpowers/
+docs/superpowers/
+ru-routing-projects-comparison.json
