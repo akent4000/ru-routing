@@ -4,10 +4,11 @@ sources:
     input_type: geosite_dat
     layout: single_artifact
     required: true
-    expected_categories: [category-ru, private]
+    expected_categories: [category-ru, private, whitelist]
     category_locations:
       category-ru: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
       private: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      whitelist: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
     attribution: aireps/geosite, synchronized from v2fly/domain-list-community
     license:
       spdx: MIT
@@ -84,6 +85,35 @@ sources:
       redistribution_reviewed: true
     freshness:
       max_age_hours: 168
+  - name: hydraponique/roscomvpn-geoip
+    url: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
+    input_type: geoip_dat
+    layout: single_artifact
+    required: true
+    expected_categories: [direct, whitelist]
+    category_locations:
+      direct: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
+      whitelist: https://github.com/hydraponique/roscomvpn-geoip/releases/latest/download/geoip.dat
+    attribution: hydraponique/roscomvpn-geoip contributors
+    license:
+      spdx: NOASSERTION
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 48
+  - name: kirilllavrov/RU-domain-list-for-whitelist
+    url: https://github.com/kirilllavrov/RU-domain-list-for-whitelist/releases/latest/download/dlc.dat
+    input_type: geosite_dat
+    layout: single_artifact
+    required: true
+    expected_categories: [whitelist-ru]
+    category_locations:
+      whitelist-ru: https://github.com/kirilllavrov/RU-domain-list-for-whitelist/releases/latest/download/dlc.dat
+    attribution: kirilllavrov/RU-domain-list-for-whitelist contributors
+    license:
+      spdx: NOASSERTION
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 8760
   - name: builtin/private-networks
     url: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
     input_type: builtin
