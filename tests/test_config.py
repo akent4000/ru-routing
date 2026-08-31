@@ -12,10 +12,12 @@ EXPECTED_SOURCES = {
     "jutsu-dev/ru-route-lists",
     "Loyalsoldier/v2ray-rules-dat",
     "itdoginfo/allow-domains",
+    "hydraponique/roscomvpn-geoip",
+    "kirilllavrov/RU-domain-list-for-whitelist",
     "builtin/private-networks",
 }
 
-UNVERIFIED_LICENSE_SOURCES = ("hydraponique/roscomvpn-geoip",)
+UNVERIFIED_LICENSE_SOURCES = ()
 
 
 @pytest.mark.parametrize("source_name", UNVERIFIED_LICENSE_SOURCES)
@@ -76,7 +78,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     )
 
     assert aireps.freshness.max_sync_lag_hours == 48
-    assert aireps.expected_categories == ("category-ru", "private")
+    assert aireps.expected_categories == ("category-ru", "private", "whitelist")
     assert (
         policy.source_categories[
             "runetfreedom/russia-v2ray-rules-dat:win-spy"
@@ -144,7 +146,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
+        "13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48"
     )
     category_scope_by_previous_policy = {
         migration.expected_previous_policy_fingerprint: migration
@@ -154,18 +156,29 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
     ]
     assert category_scope.expected_current_policy_fingerprint == (
-        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
+        "13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48"
     )
     private_scope = category_scope_by_previous_policy[
         "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
     ]
     assert private_scope.expected_current_policy_fingerprint == (
-        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
+        "13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48"
     )
     assert private_scope.reset_category_keys == frozenset(
         {"lite:private", "server:private"}
     )
     assert private_scope.reset_size is True
+
+    whitelist_scope = category_scope_by_previous_policy[
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
+    ]
+    assert whitelist_scope.expected_current_policy_fingerprint == (
+        "13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48"
+    )
+    assert whitelist_scope.reset_category_keys == frozenset(
+        {"lite:ru-whitelist", "server:ru-whitelist", "server:ru-direct-geoip"}
+    )
+    assert whitelist_scope.reset_size is True
 
     with pytest.raises(FrozenInstanceError):
         aireps.url = "https://invalid.example"  # type: ignore[misc]

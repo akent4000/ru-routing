@@ -9,26 +9,31 @@ work or replace the upstream license terms.
 
 | Source | Material used | Upstream license evidence | Attribution |
 | --- | --- | --- | --- |
-| [aireps/geosite](https://github.com/aireps/geosite) | global RU domain category | [MIT license](https://github.com/aireps/geosite/blob/master/LICENSE). The repository states that it synchronizes data from [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community), which also publishes an [MIT license](https://github.com/v2fly/domain-list-community/blob/master/LICENSE). | aireps/geosite and v2fly/domain-list-community contributors |
+| [aireps/geosite](https://github.com/aireps/geosite) | global RU and private domain categories, and the RU direct-whitelist domain category | [MIT license](https://github.com/aireps/geosite/blob/master/LICENSE). The repository states that it synchronizes data from [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community), which also publishes an [MIT license](https://github.com/v2fly/domain-list-community/blob/master/LICENSE). | aireps/geosite and v2fly/domain-list-community contributors |
 | [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) | blocked, RU, RU-inside, ads, tracker, spy, and service domain categories | [GNU GPL v3.0](https://github.com/runetfreedom/russia-v2ray-rules-dat/blob/main/LICENSE), detected by GitHub as `GPL-3.0`. The registry records `GPL-3.0-only`; no separate `-or-later` grant was found in the repository. | runetfreedom/russia-v2ray-rules-dat contributors |
 | [jutsu-dev/ru-route-lists](https://github.com/jutsu-dev/ru-route-lists) | blocked domain and CIDR lists | [MIT license](https://github.com/jutsu-dev/ru-route-lists/blob/main/LICENSE) | jutsu-dev/ru-route-lists contributors |
 | [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat) | RU GeoIP category | [GNU GPL v3.0](https://github.com/Loyalsoldier/v2ray-rules-dat/blob/master/LICENSE), detected by GitHub as `GPL-3.0`. The registry records `GPL-3.0-only`; no separate `-or-later` grant was found in the repository. | Loyalsoldier/v2ray-rules-dat contributors |
 
-## Excluded pending license verification
+## Sources included without a verified license (NOASSERTION)
 
-The following repositories are not configured sources and cannot enter a new
-validated build. They remain candidates only; no license or redistribution
-right is claimed here.
+The following configured sources declare no verifiable redistribution license
+upstream. They are consumed with attribution under an explicit maintainer
+decision, recorded here for transparency, not because a grant was found.
+`config/sources.yaml` records their SPDX status as `NOASSERTION` with
+`redistribution_reviewed: true`.
 
-| Candidate | Material considered | Verification status |
-| --- | --- | --- |
-| [hydraponique/roscomvpn-geoip](https://github.com/hydraponique/roscomvpn-geoip) | RU GeoIP data | **No repository license declaration found.** The repository has no root license file and its README does not state a license. Its README also names data providers whose terms may apply. |
-| [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains) | Russia-inside, Russia-outside, and selected service domain lists | **No repository license declaration found.** The repository has no root license file and its README does not state a license. Its README also names list providers whose terms may apply. |
+| Source | Material used | Upstream license evidence | Attribution |
+| --- | --- | --- | --- |
+| [itdoginfo/allow-domains](https://github.com/itdoginfo/allow-domains) | Russia-outside domain list (`ru-inside` category) | **No repository license declaration found.** The repository has no root license file and its README does not state a license. Its README also names list providers whose terms may apply. | itdoginfo/allow-domains contributors |
+| [hydraponique/roscomvpn-geoip](https://github.com/hydraponique/roscomvpn-geoip) | direct and whitelist RU CIDR categories (`ru-direct-geoip`) | **No repository license declaration found.** The GitHub API reports no license and the repository has no root license file. | hydraponique/roscomvpn-geoip contributors |
+| [kirilllavrov/RU-domain-list-for-whitelist](https://github.com/kirilllavrov/RU-domain-list-for-whitelist) | `whitelist-ru` domain category (`ru-whitelist`) | **No verifiable license.** The README claims an "MIT License" but the repository ships no `LICENSE` file and the GitHub API reports no detected license; treated as `NOASSERTION` until a license file is added upstream. | kirilllavrov/RU-domain-list-for-whitelist contributors |
 
-Before re-enabling either candidate, obtain verifiable upstream permission,
-record only the supported SPDX/license terms and attribution, add the source
-and mappings back to the version-controlled policy, and rerun the complete
-validation suite. Absence of a license is not permission to redistribute.
+If any of these upstreams publish a verifiable license, update this table and
+the corresponding `config/sources.yaml` `license.spdx` entry to the confirmed
+SPDX identifier. If instead an upstream's terms turn out to prohibit
+redistribution, remove the source and its mappings and rerun the complete
+validation suite. Absence of a license is not permission to redistribute; it
+is a maintainer-accepted risk recorded here.
 
 ## Generated artifacts
 
