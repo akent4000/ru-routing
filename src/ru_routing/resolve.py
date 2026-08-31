@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import bisect
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -13,6 +14,25 @@ from .models import Category, Dataset, PolicyTier, RuleEntry, RuleKind
 
 class ResolutionError(ValueError):
     """Raised when normalized entries cannot be resolved safely."""
+
+
+_DOTLESS_REGEX = re.compile(r"^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _matches_only_dotless_hosts(pattern: str) -> bool:
+    """Whether a domain regex provably cannot match any dotted hostname.
+
+    Fail-closed blocker treatment exists because regex overlap cannot be
+    decided in general.  The one shape upstream data actually ships -- a
+    fully anchored single-label pattern such as geosite ``private``'s
+    ``^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`` -- can be recognized exactly, and
+    treating it as matching *every* host wipes whole lower-tier categories
+    (live: lite:trackers 408 -> 0).  Recognize that exact grammar so dotted
+    entries keep their tier resolution while genuine catch-all patterns stay
+    fail-closed.
+    """
+
+    return pattern == _DOTLESS_REGEX.pattern
 
 
 @dataclass(frozen=True)
@@ -296,6 +316,11 @@ class _BlockerIndex:
     exact_domains: dict[str, list[_Blocker]]
     suffix_trie: dict
     fail_closed: tuple[_Blocker, ...]
+    # DOMAIN_REGEX blockers whose pattern matches only dotless hosts (see
+    # ``_matches_only_dotless_hosts``).  These cannot overlap any dotted
+    # candidate, so they are subtracted from dotted entries' perspective as
+    # if absent, instead of failing the whole tier closed.
+    dotless_regex: tuple[_Blocker, ...]
     cidr_by_version: dict[int, list[_Blocker]]
     # Sorted-by-start-address view of cidr_by_version, built lazily (only
     # when a CIDR conflict-pair query actually needs it -- _subtract_cidr's
@@ -347,6 +372,7 @@ def _build_blocker_indexes(
         exact_domains: dict[str, list[_Blocker]] = {}
         suffix_trie: dict = {}
         fail_closed: list[_Blocker] = []
+        dotless_regex: list[_Blocker] = []
         cidr_by_version: dict[int, list[_Blocker]] = {}
         for blocker_category, blocker_entries in blocker_source.items():
             if not _takes_ownership(dataset, tiers[blocker_category], tier):
@@ -358,6 +384,10 @@ def _build_blocker_indexes(
                     _domain_trie_insert(suffix_trie, item)
                 elif blocker.kind == RuleKind.DOMAIN_SUFFIX:
                     _suffix_trie_insert(suffix_trie, item)
+                elif blocker.kind == RuleKind.DOMAIN_REGEX and (
+                    _matches_only_dotless_hosts(blocker.value)
+                ):
+                    dotless_regex.append(item)
                 elif blocker.kind in (RuleKind.DOMAIN_KEYWORD, RuleKind.DOMAIN_REGEX):
                     fail_closed.append(item)
                 elif blocker.kind == RuleKind.CIDR:
@@ -367,6 +397,7 @@ def _build_blocker_indexes(
             exact_domains=exact_domains,
             suffix_trie=suffix_trie,
             fail_closed=tuple(fail_closed),
+            dotless_regex=tuple(dotless_regex),
             cidr_by_version=cidr_by_version,
         )
         indexes_by_tier[tier] = index
@@ -504,14 +535,24 @@ def _is_blocked(entry: RuleEntry, index: _BlockerIndex) -> bool:
         # Fail-closed: a KEYWORD/REGEX entry overlaps ANY other domain-kind
         # blocker unconditionally (matches _entries_overlap's
         # kind-membership check), not just other KEYWORD/REGEX blockers.
-        return bool(index.exact_domains) or _suffix_trie_has_any(index.suffix_trie)
+        # A dotless-only regex blocker does match a dotless KEYWORD/REGEX
+        # candidate, so it counts toward the same fail-closed answer.
+        return (
+            bool(index.exact_domains)
+            or _suffix_trie_has_any(index.suffix_trie)
+            or bool(index.dotless_regex)
+        )
     if entry.kind == RuleKind.DOMAIN:
         if entry.value in index.exact_domains:
+            return True
+        if index.dotless_regex and "." not in entry.value:
             return True
         return _suffix_trie_has_overlap(
             index.suffix_trie, entry.value, candidate_is_suffix=False
         )
     if entry.kind == RuleKind.DOMAIN_SUFFIX:
+        if index.dotless_regex and "." not in entry.value:
+            return True
         return _suffix_trie_has_overlap(
             index.suffix_trie, entry.value, candidate_is_suffix=True
         )
@@ -595,11 +636,19 @@ def _matching_blockers(entry: RuleEntry, index: _BlockerIndex) -> tuple[_Blocker
         return _cidr_overlapping_blockers(index, network)
     if entry.kind in (RuleKind.DOMAIN_KEYWORD, RuleKind.DOMAIN_REGEX):
         matched: list[_Blocker] = list(index.fail_closed)
+        # A dotless-only regex blocker matches any dotless KEYWORD/REGEX
+        # candidate (both are single-label host grammars).
+        matched.extend(index.dotless_regex)
         for domain_blockers in index.exact_domains.values():
             matched.extend(domain_blockers)
         matched.extend(_collect_terminals(index.suffix_trie))
         return tuple(matched)
     matched = list(index.fail_closed)
+    dotless = entry.kind in (RuleKind.DOMAIN, RuleKind.DOMAIN_SUFFIX) and (
+        "." not in entry.value
+    )
+    if dotless:
+        matched.extend(index.dotless_regex)
     if entry.kind == RuleKind.DOMAIN:
         matched.extend(index.exact_domains.get(entry.value, ()))
         matched.extend(
@@ -691,10 +740,24 @@ def _entries_overlap(first: RuleEntry, second: RuleEntry) -> bool:
         )
     if first.kind == RuleKind.CIDR or second.kind == RuleKind.CIDR:
         return False
-    if {RuleKind.DOMAIN_REGEX, RuleKind.DOMAIN_KEYWORD} & {
-        first.kind,
-        second.kind,
-    }:
+    if first.kind == RuleKind.DOMAIN_REGEX and second.kind == RuleKind.DOMAIN_REGEX:
+        return True
+    if first.kind == RuleKind.DOMAIN_REGEX or second.kind == RuleKind.DOMAIN_REGEX:
+        # A dotless-only regex provably cannot match a dotted host, so it
+        # only overlaps the dotless domain grammar (see
+        # ``_matches_only_dotless_hosts``); anything else stays fail-closed.
+        regex_entry, other = (
+            (first, second) if first.kind == RuleKind.DOMAIN_REGEX else (second, first)
+        )
+        if _matches_only_dotless_hosts(regex_entry.value):
+            return other.kind in (
+                RuleKind.DOMAIN,
+                RuleKind.DOMAIN_SUFFIX,
+                RuleKind.DOMAIN_KEYWORD,
+                RuleKind.DOMAIN_REGEX,
+            ) and "." not in other.value
+        return other.kind in _DOMAIN_RULE_KINDS
+    if {RuleKind.DOMAIN_KEYWORD} & {first.kind, second.kind}:
         return {first.kind, second.kind} <= _DOMAIN_RULE_KINDS
     return _domains_overlap(first, second)
 

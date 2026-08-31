@@ -137,6 +137,47 @@ def test_blocked_regex_removes_potentially_matching_direct_exact_and_is_reported
     } == {(RuleKind.DOMAIN_REGEX, RuleKind.DOMAIN)}
 
 
+def test_dotless_regex_blocker_keeps_dotted_lower_tier_entries():
+    """A regex that cannot match any dotted host must only block dotless hosts.
+
+    Upstream geosite ``private`` ships ``^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$``,
+    which matches exactly the dotless-host grammar.  Fail-closed treatment of
+    that blocker wiped every dotted entry from lower-tier lite categories
+    (live: lite:trackers 408 -> 0), so the overlap check must prove a dotted
+    candidate can actually match before subtracting it.
+    """
+
+    build = resolve_datasets(
+        (
+            rule(RuleKind.DOMAIN, "rarbg.com", "trackers"),
+            rule(RuleKind.DOMAIN_SUFFIX, "rarbg.com", "trackers"),
+            rule(RuleKind.DOMAIN, "localhost", "trackers"),
+            rule(
+                RuleKind.DOMAIN_REGEX,
+                r"^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$",
+                "ru",
+            ),
+        ),
+        policy_for("ru", "trackers"),
+    )
+
+    assert entries(build.lite, "trackers") == {
+        ("domain", "rarbg.com"),
+        ("domain_suffix", "rarbg.com"),
+    }
+    # server keeps thematic categories intact by design (_takes_ownership's
+    # server+thematic carve-out), so the dotless localhost survives there.
+    assert entries(build.server, "trackers") == {
+        ("domain", "rarbg.com"),
+        ("domain_suffix", "rarbg.com"),
+        ("domain", "localhost"),
+    }
+    assert {
+        (record.lower_entry.value, record.dataset)
+        for record in build.conflicts.resolved
+    } == {("localhost", "lite")}
+
+
 def test_exact_blocker_removes_potentially_matching_direct_regex():
     build = resolve_datasets(
         (
