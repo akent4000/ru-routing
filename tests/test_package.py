@@ -10,11 +10,12 @@ import pytest
 
 import ru_routing.package as package_module
 from ru_routing.config import LicenseMetadata, ThresholdPolicy, load_thresholds
-from ru_routing.fetch import FetchedSource
+from ru_routing.fetch import DegradedSource, FetchedSource
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.package import (
     AnomalyError,
     BuildMetadata,
+    Manifest,
     PackagingError,
     PolicyConfigs,
     content_fingerprint,
@@ -122,6 +123,15 @@ def _write_dist(dist: Path) -> None:
 
 _DEFAULT_THRESHOLDS = ThresholdPolicy(
     category_count_change_ratio=0.5, size_change_ratio=0.5
+)
+
+DEGRADED_JUTSU = DegradedSource(
+    name="jutsu-dev/ru-route-lists",
+    status="degraded",
+    reason="stale",
+    excluded_from_build=True,
+    observed_freshness_age_hours=49.0,
+    max_age_hours=48,
 )
 
 _CURRENT_SOURCE_IDS = (
@@ -241,6 +251,18 @@ def test_policy_fingerprint_is_stable_for_identical_input():
     assert left == right
 
 
+def test_approved_migrations_target_current_policy_fingerprint():
+    current = policy_fingerprint(_CURRENT_POLICY_CONFIGS)
+
+    assert all(
+        migration.expected_current_policy_fingerprint == current
+        for migration in (
+            *_MIGRATION_THRESHOLDS.source_removal_migrations,
+            *_MIGRATION_THRESHOLDS.category_scope_migrations,
+        )
+    )
+
+
 # --- plan_release ---
 
 
@@ -358,6 +380,26 @@ def test_plan_release_fails_on_category_count_anomaly():
         plan_release(metadata)
 
 
+def test_quarantine_allows_only_its_affected_category_count_change():
+    build = _build()
+    previous = {
+        "content_fingerprint": "a" * 64,
+        "policy_fingerprint": "b" * 64,
+        "category_counts": {"server:blocked": 100},
+        "total_size_bytes": package_module._content_size_bytes(build),
+    }
+    metadata = _metadata(build=build, previous_manifest=previous)
+    metadata = replace(
+        metadata,
+        quarantined_category_keys=frozenset({"server:blocked"}),
+    )
+
+    assert plan_release(metadata).should_release is True
+
+    with pytest.raises(AnomalyError, match="category server:blocked"):
+        plan_release(replace(metadata, quarantined_category_keys=frozenset()))
+
+
 def test_plan_release_allows_exact_approved_source_removal_baseline_reset():
     metadata = _source_removal_metadata(previous=_pre_removal_manifest())
 
@@ -393,7 +435,7 @@ def test_plan_release_allows_exact_upstream_private_policy_migration():
 
     assert decision.should_release is True
     assert decision.policy_fingerprint == (
-        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     )
 
 
@@ -551,6 +593,45 @@ def test_package_build_manifest_contains_required_fields(tmp_path):
     assert manifest.artifact_sizes
     assert manifest.checksums
     assert manifest.tool_versions == {"xray": "1.0.0"}
+
+
+def test_manifest_records_stale_source_without_listing_it_as_used(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+
+    manifest = package_build(
+        dist, replace(_metadata(), degraded_sources=(DEGRADED_JUTSU,))
+    )
+
+    expected_degraded_sources = [
+        {
+            "excluded_from_build": True,
+            "max_age_hours": 48,
+            "observed_freshness_age_hours": 49.0,
+            "reason": "stale",
+            "source": "jutsu-dev/ru-route-lists",
+            "status": "degraded",
+        }
+    ]
+    assert manifest.to_json_dict()["degraded_sources"] == expected_degraded_sources
+    assert "jutsu-dev/ru-route-lists" not in {
+        source["name"] for source in manifest.sources
+    }
+    with tarfile.open(dist.parent / manifest.archive_filename, "r:gz") as archive:
+        member = next(
+            item for item in archive.getmembers() if item.name.endswith("manifest.json")
+        )
+        bundled_manifest = json.loads(archive.extractfile(member).read())
+    assert bundled_manifest["degraded_sources"] == expected_degraded_sources
+
+
+def test_manifest_parses_older_document_without_degraded_sources(tmp_path):
+    dist = tmp_path / "dist"
+    _write_dist(dist)
+    document = package_build(dist, _metadata()).to_json_dict()
+    document.pop("degraded_sources")
+
+    assert Manifest.from_json_dict(document).degraded_sources == ()
 
 
 def test_package_build_preserves_representation_losses_after_archive_rewrite(

@@ -90,6 +90,26 @@ class FetchedSource:
 
 
 @dataclass(frozen=True)
+class DegradedSource:
+    """A required source excluded from a build due to stale upstream data."""
+
+    name: str
+    status: str
+    reason: str
+    excluded_from_build: bool
+    observed_freshness_age_hours: float
+    max_age_hours: int
+
+
+@dataclass(frozen=True)
+class FetchedInputs:
+    """Fetched sources and any sources quarantined during the transaction."""
+
+    sources: tuple[FetchedSource, ...]
+    degraded_sources: tuple[DegradedSource, ...] = ()
+
+
+@dataclass(frozen=True)
 class _Release:
     revision: str
     published_at: datetime
@@ -99,7 +119,7 @@ class _Release:
 
 def fetch_all(
     registry: SourceRegistry, destination: Path, client: httpx.Client
-) -> tuple[FetchedSource, ...]:
+) -> FetchedInputs:
     """Fetch every required source into ``destination`` as one transaction.
 
     The prior destination is left untouched until every upstream has been
@@ -115,30 +135,38 @@ def fetch_all(
         metadata_dir = staging / "metadata"
         objects_dir.mkdir()
         metadata_dir.mkdir()
-        staged = tuple(
-            _fetch_source(source, objects_dir, metadata_dir, client)
-            for source in registry.sources
-        )
+        staged: list[FetchedSource] = []
+        degraded_sources: list[DegradedSource] = []
+        for source in registry.sources:
+            try:
+                staged.append(_fetch_source(source, objects_dir, metadata_dir, client))
+            except _StaleSource as error:
+                degraded = _quarantine_record(source, error.age_hours)
+                _write_quarantine_metadata(metadata_dir, degraded)
+                degraded_sources.append(degraded)
         _replace_directory(staging, destination)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    return tuple(
-        FetchedSource(
-            name=item.name,
-            resolved_revision=item.resolved_revision,
-            sha256=item.sha256,
-            license=item.license,
-            object_paths={
-                category: tuple(
-                    destination / path.relative_to(staging) for path in paths
-                )
-                for category, paths in item.object_paths.items()
-            },
-            observed_freshness_lag_hours=item.observed_freshness_lag_hours,
-        )
-        for item in staged
+    return FetchedInputs(
+        sources=tuple(
+            FetchedSource(
+                name=item.name,
+                resolved_revision=item.resolved_revision,
+                sha256=item.sha256,
+                license=item.license,
+                object_paths={
+                    category: tuple(
+                        destination / path.relative_to(staging) for path in paths
+                    )
+                    for category, paths in item.object_paths.items()
+                },
+                observed_freshness_lag_hours=item.observed_freshness_lag_hours,
+            )
+            for item in staged
+        ),
+        degraded_sources=tuple(degraded_sources),
     )
 
 
@@ -162,7 +190,7 @@ def _fetch_source(
             locations = _release_locations(source, release)
         age_hours = _age_hours(source_time)
         if age_hours > source.freshness.max_age_hours:
-            raise FetchError("freshness age exceeds declared limit")
+            raise _StaleSource(age_hours)
         lag_hours = _sync_lag_hours(source, release, client)
         if (
             lag_hours is not None
@@ -184,6 +212,8 @@ def _fetch_source(
         )
         _write_metadata(metadata_dir, source, fetched, age_hours, object_digests)
         return fetched
+    except _StaleSource:
+        raise
     except FetchError as error:
         raise FetchError(f"fetch failed for source {source.name}: {error}") from error
     except (OSError, ValueError, httpx.HTTPError) as error:
@@ -440,6 +470,14 @@ class _RetryableResponse(Exception):
     """Internal marker for transient HTTP server responses."""
 
 
+class _StaleSource(FetchError):
+    """Internal marker carrying the age of a source eligible for quarantine."""
+
+    def __init__(self, age_hours: float) -> None:
+        super().__init__("freshness age exceeds declared limit")
+        self.age_hours = age_hours
+
+
 def _json_response(source_name: str, url: str, client: httpx.Client) -> Any:
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -501,6 +539,32 @@ def _write_metadata(
         "sha256": fetched.sha256,
     }
     (directory / f"{source.name.replace('/', '--')}.json").write_text(
+        json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+def _quarantine_record(source: SourceDefinition, age_hours: float) -> DegradedSource:
+    return DegradedSource(
+        source.name,
+        "degraded",
+        "stale",
+        True,
+        age_hours,
+        source.freshness.max_age_hours,
+    )
+
+
+def _write_quarantine_metadata(directory: Path, degraded: DegradedSource) -> None:
+    document = {
+        "excluded_from_build": degraded.excluded_from_build,
+        "max_age_hours": degraded.max_age_hours,
+        "name": degraded.name,
+        "observed_freshness_age_hours": degraded.observed_freshness_age_hours,
+        "reason": degraded.reason,
+        "status": degraded.status,
+    }
+    (directory / f"{degraded.name.replace('/', '--')}.json").write_text(
         json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )

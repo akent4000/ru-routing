@@ -94,17 +94,11 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     )
     jutsu = registry.resolve("jutsu-dev/ru-route-lists")
     assert jutsu.layout == "release_assets"
-    assert jutsu.freshness.max_age_hours == 720
+    assert jutsu.freshness.max_age_hours == 48
     assert jutsu.category_locations["blocked-domains"] == (
         "https://github.com/jutsu-dev/ru-route-lists/releases/download/"
         "latest/rkn-domains.lst",
     )
-    readme = Path("README.md").read_text(encoding="utf-8")
-    assert "jutsu-dev/ru-route-lists" in readme
-    assert "development/testing" in readme
-    assert "720 hours" in readme
-    assert "2026-09-30 23:59 UTC" in readme
-    assert "48 hours" in readme
     assert thresholds.category_count_change_ratio == 0.5
     (source_removal,) = thresholds.source_removal_migrations
     # Historical migration record: fixes the exact set of sources removed
@@ -143,12 +137,14 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
             "server:geoip-global",
         }
     )
+
+
     assert source_removal.reset_size is True
     assert source_removal.expected_previous_policy_fingerprint == (
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     )
     category_scope_by_previous_policy = {
         migration.expected_previous_policy_fingerprint: migration
@@ -158,13 +154,13 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
     ]
     assert category_scope.expected_current_policy_fingerprint == (
-        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     )
     private_scope = category_scope_by_previous_policy[
         "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
     ]
     assert private_scope.expected_current_policy_fingerprint == (
-        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     )
     assert private_scope.reset_category_keys == frozenset(
         {"lite:private", "server:private"}
@@ -175,6 +171,13 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         aireps.url = "https://invalid.example"  # type: ignore[misc]
     with pytest.raises(TypeError):
         policy.source_categories["other"] = object()  # type: ignore[index]
+
+
+def test_jutsu_has_normal_freshness_without_temporary_exception():
+    registry = load_registry(Path("config/sources.yaml"))
+
+    assert registry.resolve("jutsu-dev/ru-route-lists").freshness.max_age_hours == 48
+    assert "720 hours" not in Path("README.md").read_text(encoding="utf-8")
 
 
 def test_registry_resolves_source_attribution_and_validates_fixture_overrides(tmp_path):

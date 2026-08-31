@@ -34,7 +34,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .config import CategoryScopeMigration, SourceRemovalMigration, ThresholdPolicy
-from .fetch import FetchedSource
+from .fetch import DegradedSource, FetchedSource
 from .render import representation_report
 from .resolve import ConflictReport, ResolvedBuild
 
@@ -85,6 +85,14 @@ class BuildMetadata:
     #: naive timestamp causes ``_version_string`` to raise ``PackagingError``.
     built_at: str
     tool_versions: Mapping[str, str] = field(default_factory=dict)
+    degraded_sources: tuple[DegradedSource, ...] = ()
+    quarantined_category_keys: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "degraded_sources", tuple(self.degraded_sources))
+        object.__setattr__(
+            self, "quarantined_category_keys", frozenset(self.quarantined_category_keys)
+        )
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,7 @@ class Manifest:
     conflict_statistics: Mapping[str, int]
     built_at: str
     representation_losses: tuple[Mapping[str, str], ...] = ()
+    degraded_sources: tuple[Mapping[str, object], ...] = ()
     archive_filename: str | None = None
     archive_sha256: str | None = None
     archive_size_bytes: int | None = None
@@ -126,6 +135,11 @@ class Manifest:
             self,
             "representation_losses",
             tuple(dict(loss) for loss in self.representation_losses),
+        )
+        object.__setattr__(
+            self,
+            "degraded_sources",
+            tuple(dict(source) for source in self.degraded_sources),
         )
         object.__setattr__(
             self, "category_counts", MappingProxyType(dict(self.category_counts))
@@ -161,6 +175,13 @@ class Manifest:
             "conflict_statistics": dict(sorted(self.conflict_statistics.items())),
             "representation_losses": [
                 dict(loss) for loss in self.representation_losses
+            ],
+            "degraded_sources": [
+                dict(source)
+                for source in sorted(
+                    self.degraded_sources,
+                    key=lambda source: str(source.get("source", "")),
+                )
             ],
             "built_at": self.built_at,
             "archive_filename": self.archive_filename,
@@ -200,6 +221,7 @@ class Manifest:
             conflict_statistics=dict(data["conflict_statistics"]),
             built_at=data["built_at"],
             representation_losses=tuple(data.get("representation_losses", ())),
+            degraded_sources=tuple(data.get("degraded_sources", ())),
             archive_filename=data.get("archive_filename"),
             archive_sha256=data.get("archive_sha256"),
             archive_size_bytes=data.get("archive_size_bytes"),
@@ -276,6 +298,7 @@ def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
             if category_scope_change
             else frozenset()
         )
+        | metadata.quarantined_category_keys
     )
     reset_size = bool(source_removal and source_removal.reset_size) or bool(
         category_scope_change and category_scope_change.reset_size
@@ -510,6 +533,12 @@ def package_build(dist: Path, metadata: BuildMetadata) -> Manifest:
         conflict_statistics=_conflict_statistics(metadata.conflicts),
         built_at=metadata.built_at,
         representation_losses=_representation_loss_documents(metadata.build),
+        degraded_sources=tuple(
+            _degraded_source_document(source)
+            for source in sorted(
+                metadata.degraded_sources, key=lambda source: source.name
+            )
+        ),
     )
 
     manifest_path = destination / "manifest.json"
@@ -632,6 +661,7 @@ def _manifest_kwargs(manifest: Manifest) -> dict[str, object]:
         "conflict_statistics": manifest.conflict_statistics,
         "built_at": manifest.built_at,
         "representation_losses": manifest.representation_losses,
+        "degraded_sources": manifest.degraded_sources,
     }
 
 
@@ -714,6 +744,17 @@ def _source_document(source: FetchedSource) -> Mapping[str, object]:
             "redistribution_reviewed": source.license.redistribution_reviewed,
         },
         "observed_freshness_lag_hours": source.observed_freshness_lag_hours,
+    }
+
+
+def _degraded_source_document(source: DegradedSource) -> Mapping[str, object]:
+    return {
+        "source": source.name,
+        "status": source.status,
+        "reason": source.reason,
+        "excluded_from_build": source.excluded_from_build,
+        "observed_freshness_age_hours": source.observed_freshness_age_hours,
+        "max_age_hours": source.max_age_hours,
     }
 
 

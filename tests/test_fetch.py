@@ -12,7 +12,7 @@ from ru_routing.config import (
     SourceDefinition,
     SourceRegistry,
 )
-from ru_routing.fetch import FetchError, fetch_all
+from ru_routing.fetch import DegradedSource, FetchError, fetch_all
 
 
 def source(
@@ -62,8 +62,8 @@ def test_fetches_a_pinned_raw_input_to_a_content_addressed_object_and_metadata(
         SourceRegistry((source(),)), tmp_path / "inputs", client(handler)
     )
 
-    assert len(fetched) == 1
-    item = fetched[0]
+    assert len(fetched.sources) == 1
+    item = fetched.sources[0]
     assert item.resolved_revision == "0123456789abcdef"
     assert item.sha256 == digest
     assert item.license.spdx == "MIT"
@@ -108,7 +108,7 @@ def test_retries_transient_server_errors_before_downloading_required_input(tmp_p
     )
 
     assert attempts == 3
-    assert fetched[0].object_paths["rules"][0].read_bytes() == body
+    assert fetched.sources[0].object_paths["rules"][0].read_bytes() == body
 
 
 @pytest.mark.parametrize("body", [b"", b"   \n"])
@@ -224,8 +224,8 @@ def test_follows_a_resolved_release_asset_redirect_before_hashing_it(tmp_path):
         SourceRegistry((release_source,)), tmp_path / "inputs", client(handler)
     )
 
-    assert fetched[0].resolved_revision == "abcdef"
-    assert fetched[0].object_paths["rules"][0].read_bytes() == body
+    assert fetched.sources[0].resolved_revision == "abcdef"
+    assert fetched.sources[0].object_paths["rules"][0].read_bytes() == body
 
 
 @pytest.mark.parametrize(
@@ -292,7 +292,7 @@ def test_resolves_release_tag_refs_to_the_tagged_commit(
     )
 
     expected = "lightweight-commit" if reference_type == "commit" else "tagged-commit"
-    assert fetched[0].resolved_revision == expected
+    assert fetched.sources[0].resolved_revision == expected
 
 
 def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path):
@@ -352,6 +352,107 @@ def test_rejects_aireps_when_v2fly_sync_lag_exceeds_its_declared_limit(tmp_path)
         fetch_all(SourceRegistry((aireps,)), tmp_path / "inputs", client(handler))
 
 
+def test_fetch_quarantines_only_a_source_whose_age_exceeds_maximum(
+    tmp_path, monkeypatch
+):
+    now = datetime.now(timezone.utc)
+    fresh_url = "https://raw.githubusercontent.com/fresh/source/0123456789abcdef/file.txt"
+    stale_url = "https://raw.githubusercontent.com/stale/source/0123456789abcdef/file.txt"
+    fresh_source = source(name="fresh/source", url=fresh_url, location=fresh_url)
+    stale_source = source(name="stale/source", url=stale_url, location=stale_url)
+    monkeypatch.setattr(
+        "ru_routing.fetch._age_hours",
+        lambda timestamp: 1.0 if timestamp > now - timedelta(hours=24) else 49.0,
+    )
+
+    def handler(request):
+        if request.url.path.endswith("/commits/0123456789abcdef"):
+            source_name = request.url.path.split("/")[2]
+            age = 1 if source_name == "fresh" else 49
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "0123456789abcdef",
+                    "commit": {
+                        "author": {"date": (now - timedelta(hours=age)).isoformat()}
+                    },
+                },
+            )
+        return httpx.Response(200, content=b"example.test\n")
+
+    result = fetch_all(
+        SourceRegistry((fresh_source, stale_source)),
+        tmp_path / "inputs",
+        client(handler),
+    )
+
+    assert [item.name for item in result.sources] == ["fresh/source"]
+    assert result.degraded_sources == (
+        DegradedSource("stale/source", "degraded", "stale", True, 49.0, 48),
+    )
+    assert json.loads(
+        (tmp_path / "inputs/metadata/stale--source.json").read_text()
+    ) == {
+        "excluded_from_build": True,
+        "max_age_hours": 48,
+        "name": "stale/source",
+        "observed_freshness_age_hours": 49.0,
+        "reason": "stale",
+        "status": "degraded",
+    }
+
+
+def test_fetch_keeps_checksum_and_sync_lag_failures_fatal(tmp_path):
+    now = datetime.now(timezone.utc)
+    source_commit = now - timedelta(hours=72)
+    upstream_commit = now - timedelta(hours=1)
+    metadata = json.loads(
+        Path("tests/fixtures/http/aireps-metadata.json").read_text(encoding="utf-8")
+    )
+    metadata["published_at"] = now.isoformat().replace("+00:00", "Z")
+
+    def handler(request):
+        if request.url.path == "/repos/aireps/geosite/releases/latest":
+            return httpx.Response(200, json=metadata)
+        if request.url.path == "/repos/aireps/geosite/git/ref/tags/v2026.08.25":
+            return httpx.Response(
+                200,
+                json={"object": {"type": "commit", "sha": "tagged-aireps-commit"}},
+            )
+        if request.url.path.endswith("/commits/tagged-aireps-commit"):
+            return httpx.Response(
+                200,
+                json={
+                    "sha": "aireps-commit",
+                    "commit": {"author": {"date": source_commit.isoformat()}},
+                },
+            )
+        if request.url.path == "/repos/v2fly/domain-list-community/commits":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "sha": "v2fly-commit",
+                        "commit": {"author": {"date": upstream_commit.isoformat()}},
+                    }
+                ],
+            )
+        return httpx.Response(200, content=b"geosite")
+
+    lagging_source = source(
+        name="aireps/geosite",
+        url="https://github.com/aireps/geosite/releases/latest/download/geosite.dat",
+        layout="single_artifact",
+        location="https://github.com/aireps/geosite/releases/latest/download/geosite.dat",
+        freshness=FreshnessRule(max_age_hours=48, max_sync_lag_hours=48),
+    )
+
+    with pytest.raises(FetchError, match="synchronization lag"):
+        fetch_all(
+            SourceRegistry((lagging_source,)), tmp_path / "inputs", client(handler)
+        )
+
+
 def _builtin_source(
     name="builtin/private-networks",
     *,
@@ -384,8 +485,8 @@ def test_builtin_source_is_fetched_without_any_network_request(tmp_path):
         SourceRegistry((_builtin_source(),)), tmp_path / "inputs", client(handler)
     )
 
-    assert len(fetched) == 1
-    item = fetched[0]
+    assert len(fetched.sources) == 1
+    item = fetched.sources[0]
     assert item.observed_freshness_lag_hours is None
     assert set(item.object_paths) == {"private"}
     (path,) = item.object_paths["private"]
@@ -404,5 +505,5 @@ def test_builtin_source_resolved_revision_is_stable_across_fetches(tmp_path):
         SourceRegistry((_builtin_source(),)), tmp_path / "inputs-2", client(handler)
     )
 
-    assert first[0].resolved_revision == second[0].resolved_revision
-    assert first[0].sha256 == second[0].sha256
+    assert first.sources[0].resolved_revision == second.sources[0].resolved_revision
+    assert first.sources[0].sha256 == second.sources[0].sha256

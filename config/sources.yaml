@@ -55,7 +55,7 @@ sources:
       spdx: MIT
       redistribution_reviewed: true
     freshness:
-      max_age_hours: 720
+      max_age_hours: 48
   - name: Loyalsoldier/v2ray-rules-dat
     url: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
     input_type: geoip_dat

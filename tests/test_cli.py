@@ -6,11 +6,14 @@ from pathlib import Path
 import pytest
 
 from ru_routing.cli import (
+    _affected_category_keys,
     _handle_publish,
     _handle_rollback,
     build_parser,
     main,
 )
+from ru_routing.config import load_policy
+from ru_routing.fetch import DegradedSource
 from ru_routing.package import Manifest
 from ru_routing.publish import FakeBackend
 
@@ -56,6 +59,22 @@ def test_config_only_check_accepts_an_explicit_config_root_outside_the_repositor
 
     assert main(["check", "--config-only", "--config", str(config_root)]) == 0
     assert "configuration is valid" in capsys.readouterr().out
+
+
+def test_quarantined_sources_affect_dataset_qualified_category_keys():
+    policy = load_policy(Path("config/categories.yaml"))
+    degraded = (
+        DegradedSource(
+            name="jutsu-dev/ru-route-lists",
+            status="degraded",
+            reason="stale",
+            excluded_from_build=True,
+            observed_freshness_age_hours=49.0,
+            max_age_hours=48,
+        ),
+    )
+
+    assert _affected_category_keys(policy, degraded) == frozenset({"server:blocked"})
 
 
 # ---------------------------------------------------------------------------
