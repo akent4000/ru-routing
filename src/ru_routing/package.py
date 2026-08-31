@@ -34,7 +34,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .config import CategoryScopeMigration, SourceRemovalMigration, ThresholdPolicy
-from .fetch import FetchedSource
+from .fetch import DegradedSource, FetchedSource
 from .render import representation_report
 from .resolve import ConflictReport, ResolvedBuild
 
@@ -85,6 +85,14 @@ class BuildMetadata:
     #: naive timestamp causes ``_version_string`` to raise ``PackagingError``.
     built_at: str
     tool_versions: Mapping[str, str] = field(default_factory=dict)
+    degraded_sources: tuple[DegradedSource, ...] = ()
+    quarantined_category_keys: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "degraded_sources", tuple(self.degraded_sources))
+        object.__setattr__(
+            self, "quarantined_category_keys", frozenset(self.quarantined_category_keys)
+        )
 
 
 @dataclass(frozen=True)

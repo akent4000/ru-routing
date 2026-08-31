@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -66,6 +67,7 @@ from typing import Mapping
 import httpx
 
 from .config import (
+    CategoryPolicy,
     ConfigError,
     SourceDefinition,
     SourceRegistry,
@@ -73,7 +75,7 @@ from .config import (
     load_registry,
     load_thresholds,
 )
-from .fetch import FetchedSource, fetch_all
+from .fetch import DegradedSource, FetchedInputs, FetchedSource, fetch_all
 from .generate import GenerationError, NativeTools, generate_all
 from .models import RuleKind
 from .normalize import NormalizationError, normalize_sources
@@ -614,7 +616,7 @@ class _FixtureGeodataReader:
 
 def _fetched_sources_from_fixtures(
     registry: SourceRegistry, fixtures_dir: Path
-) -> tuple[FetchedSource, ...]:
+) -> FetchedInputs:
     fetched: list[FetchedSource] = []
     for source in registry.sources:
         object_paths: dict[str, tuple[Path, ...]] = {}
@@ -636,12 +638,12 @@ def _fetched_sources_from_fixtures(
                 observed_freshness_lag_hours=None,
             )
         )
-    return tuple(fetched)
+    return FetchedInputs(sources=tuple(fetched), degraded_sources=())
 
 
 def _fetched_sources_from_inputs(
     registry: SourceRegistry, inputs_dir: Path
-) -> tuple[FetchedSource, ...]:
+) -> FetchedInputs:
     """Reconstruct FetchedSource tuples from a prior `fetch` output directory.
 
     Reads exactly the metadata documents fetch_all/_write_metadata writes
@@ -666,6 +668,7 @@ def _fetched_sources_from_inputs(
     objects_root = objects_dir.resolve()
     digest_cache: dict[Path, str] = {}
     fetched: list[FetchedSource] = []
+    degraded_sources: list[DegradedSource] = []
     for source in registry.sources:
         metadata_path = metadata_dir / f"{source.name.replace('/', '--')}.json"
         if not metadata_path.is_file():
@@ -673,6 +676,24 @@ def _fetched_sources_from_inputs(
                 f"no fetched metadata for {source.name} under {inputs_dir}"
             )
         document = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            raise PipelineCliError(
+                f"{source.name}: fetched metadata must be a JSON object"
+            )
+        quarantine_fields = {
+            "status",
+            "reason",
+            "excluded_from_build",
+            "max_age_hours",
+        }
+        present_quarantine_fields = quarantine_fields & document.keys()
+        if "objects" in document and present_quarantine_fields:
+            raise PipelineCliError(
+                f"{source.name}: quarantine metadata cannot contain objects"
+            )
+        if "objects" not in document:
+            degraded_sources.append(_degraded_source_from_metadata(source, document))
+            continue
         object_paths = {
             category: tuple(
                 _validated_input_object_path(
@@ -699,7 +720,51 @@ def _fetched_sources_from_inputs(
                 ),
             )
         )
-    return tuple(fetched)
+    return FetchedInputs(
+        sources=tuple(fetched), degraded_sources=tuple(degraded_sources)
+    )
+
+
+def _degraded_source_from_metadata(
+    source: SourceDefinition, document: Mapping[str, object]
+) -> DegradedSource:
+    """Validate and reconstruct one stale-source quarantine record."""
+
+    if document.get("name") != source.name:
+        raise PipelineCliError(
+            f"{source.name}: quarantine metadata has an unexpected source name"
+        )
+    if document.get("status") != "degraded":
+        raise PipelineCliError(f"{source.name}: quarantine status must be degraded")
+    if document.get("reason") != "stale":
+        raise PipelineCliError(f"{source.name}: quarantine reason must be stale")
+    if document.get("excluded_from_build") is not True:
+        raise PipelineCliError(
+            f"{source.name}: quarantine must be excluded from build"
+        )
+    age = document.get("observed_freshness_age_hours")
+    if (
+        isinstance(age, bool)
+        or not isinstance(age, (int, float))
+        or not math.isfinite(age)
+        or age < 0
+    ):
+        raise PipelineCliError(
+            f"{source.name}: quarantine observed freshness age must be non-negative"
+        )
+    maximum = document.get("max_age_hours")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
+        raise PipelineCliError(
+            f"{source.name}: quarantine maximum age must be a positive integer"
+        )
+    return DegradedSource(
+        name=source.name,
+        status="degraded",
+        reason="stale",
+        excluded_from_build=True,
+        observed_freshness_age_hours=float(age),
+        max_age_hours=maximum,
+    )
 
 
 def _validated_input_object_path(
@@ -769,12 +834,26 @@ def _is_sha256(value: object) -> bool:
 
 def _load_rules(
     arguments: argparse.Namespace, registry: SourceRegistry
-) -> tuple[FetchedSource, ...]:
+) -> FetchedInputs:
     if arguments.fixtures is not None:
         return _fetched_sources_from_fixtures(registry, arguments.fixtures)
     if arguments.inputs is not None:
         return _fetched_sources_from_inputs(registry, arguments.inputs)
     raise PipelineCliError("either --fixtures or --inputs must be given")
+
+
+def _affected_category_keys(
+    policy: CategoryPolicy, degraded_sources: tuple[DegradedSource, ...]
+) -> frozenset[str]:
+    """Return dataset-qualified category keys affected by quarantined sources."""
+
+    names = {source.name for source in degraded_sources}
+    return frozenset(
+        f"{dataset}:{mapping.canonical_category}"
+        for mapping in policy.source_categories.values()
+        if mapping.source in names
+        for dataset in mapping.datasets
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +1042,9 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
         registry, policy, threshold_policy = _load_all_configs(arguments.config)
         fetched = _load_rules(arguments, registry)
         rules = normalize_sources(
-            fetched, registry=registry, geodata_reader=_geodata_reader(arguments)
+            fetched.sources,
+            registry=registry,
+            geodata_reader=_geodata_reader(arguments),
         )
         resolved = resolve_datasets(rules, policy)
 
@@ -981,7 +1062,11 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
         metadata_for_version = BuildMetadata(
             build=resolved,
             policy_configs=_policy_configs(arguments.config, policy),
-            sources=fetched,
+            sources=fetched.sources,
+            degraded_sources=fetched.degraded_sources,
+            quarantined_category_keys=_affected_category_keys(
+                policy, fetched.degraded_sources
+            ),
             conflicts=resolved.conflicts,
             thresholds=threshold_policy,
             previous_manifest=previous_manifest,
@@ -1002,7 +1087,11 @@ def _run_build_stages(arguments: argparse.Namespace, dist: Path) -> None:
         metadata = BuildMetadata(
             build=resolved,
             policy_configs=_policy_configs(arguments.config, policy),
-            sources=fetched,
+            sources=fetched.sources,
+            degraded_sources=fetched.degraded_sources,
+            quarantined_category_keys=_affected_category_keys(
+                policy, fetched.degraded_sources
+            ),
             conflicts=resolved.conflicts,
             thresholds=threshold_policy,
             previous_manifest=previous_manifest,
@@ -1055,7 +1144,9 @@ def _handle_release_decision(arguments: argparse.Namespace) -> int:
         registry, policy, _ = _load_all_configs(arguments.config)
         fetched = _load_rules(arguments, registry)
         rules = normalize_sources(
-            fetched, registry=registry, geodata_reader=_geodata_reader(arguments)
+            fetched.sources,
+            registry=registry,
+            geodata_reader=_geodata_reader(arguments),
         )
         resolved = resolve_datasets(rules, policy)
         threshold_policy = load_thresholds(arguments.config / "thresholds.yaml")
@@ -1063,7 +1154,11 @@ def _handle_release_decision(arguments: argparse.Namespace) -> int:
         metadata = BuildMetadata(
             build=resolved,
             policy_configs=_policy_configs(arguments.config, policy),
-            sources=fetched,
+            sources=fetched.sources,
+            degraded_sources=fetched.degraded_sources,
+            quarantined_category_keys=_affected_category_keys(
+                policy, fetched.degraded_sources
+            ),
             conflicts=resolved.conflicts,
             thresholds=threshold_policy,
             previous_manifest=_previous_manifest(arguments),

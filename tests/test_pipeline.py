@@ -19,8 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from ru_routing.cli import main
+from ru_routing.cli import _fetched_sources_from_inputs, _FixtureGeodataReader, main
 from ru_routing.config import load_registry
+from ru_routing.normalize import normalize_sources
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "upstreams" / "registry"
@@ -123,6 +124,22 @@ def _replace_binary_fetch_objects_with_live_shaped_geodata(fetch_dest: Path) -> 
         (
             fetch_dest / "metadata" / f"{source.name.replace('/', '--')}.json"
         ).write_text(json.dumps(document), encoding="utf-8")
+
+
+def _write_quarantine_metadata(inputs_dir: Path, source_name: str) -> None:
+    (inputs_dir / "metadata" / f"{source_name.replace('/', '--')}.json").write_text(
+        json.dumps(
+            {
+                "excluded_from_build": True,
+                "max_age_hours": 48,
+                "name": source_name,
+                "observed_freshness_age_hours": 49.0,
+                "reason": "stale",
+                "status": "degraded",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_build_fixtures_produces_the_complete_output_contract(tmp_path):
@@ -704,6 +721,64 @@ def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     assert manifest["release_version"]
     assert manifest["category_counts"]["lite:ru"] == 1
     assert manifest["category_counts"]["server:ru-geoip"] == 1
+
+
+def test_inputs_loader_accepts_quarantine_metadata_and_omits_objects(tmp_path):
+    inputs = tmp_path / "inputs"
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    main(
+        [
+            "fetch",
+            "--config",
+            str(CONFIG_DIR),
+            "--destination",
+            str(inputs),
+            "--offline-fixtures",
+            str(FIXTURES_DIR),
+        ]
+    )
+    _write_quarantine_metadata(inputs, "jutsu-dev/ru-route-lists")
+
+    fetched_inputs = _fetched_sources_from_inputs(registry, inputs)
+
+    assert "jutsu-dev/ru-route-lists" not in {
+        source.name for source in fetched_inputs.sources
+    }
+    assert fetched_inputs.degraded_sources[0].reason == "stale"
+
+
+def test_build_excludes_quarantined_explicit_blocked_rules_before_normalization(
+    tmp_path,
+):
+    inputs = tmp_path / "inputs"
+    assert (
+        main(
+            [
+                "fetch",
+                "--config",
+                str(CONFIG_DIR),
+                "--destination",
+                str(inputs),
+                "--offline-fixtures",
+                str(FIXTURES_DIR),
+            ]
+        )
+        == 0
+    )
+    _write_quarantine_metadata(inputs, "jutsu-dev/ru-route-lists")
+
+    fetched_inputs = _fetched_sources_from_inputs(
+        load_registry(CONFIG_DIR / "sources.yaml"), inputs
+    )
+    rules = normalize_sources(
+        fetched_inputs.sources,
+        registry=load_registry(CONFIG_DIR / "sources.yaml"),
+        geodata_reader=_FixtureGeodataReader(),
+    )
+
+    assert "jutsu-dev/ru-route-lists" not in {
+        source for rule in rules for source in rule.sources
+    }
 
 
 def test_build_inputs_rejects_object_checksum_mismatch_in_metadata(tmp_path, capsys):
