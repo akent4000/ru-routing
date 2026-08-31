@@ -4,6 +4,13 @@
   "route": {
     "rule_set": [
       {
+        "tag": "private",
+        "type": "remote",
+        "format": "binary",
+        "url": "{{CDN_BASE}}/sing-box/lite/private.srs",
+        "download_detour": "direct"
+      },
+      {
         "tag": "spy",
         "type": "remote",
         "format": "binary",
@@ -27,8 +34,9 @@
     ],
     "rules": [
       {
-        "_comment": "1. Private/local traffic to DIRECT via sing-box's native ip_is_private condition, not custom geodata.",
+        "_comment": "1. Private/local domains and IP traffic to DIRECT via the generated private rule set and sing-box's native ip_is_private condition.",
         "ip_is_private": true,
+        "rule_set": ["private"],
         "outbound": "direct"
       },
       {

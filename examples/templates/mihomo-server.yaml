@@ -33,6 +33,13 @@ proxy-groups:
     # below to route a small representative subset of service categories.
 
 rule-providers:
+  private:
+    type: http
+    behavior: classical
+    url: "{{CDN_BASE}}/mihomo/server/private.yaml"
+    path: ./rule-providers/server-private.yaml
+    format: yaml
+    interval: 86400
   # spy and ads are sourced from runetfreedom/russia-v2ray-rules-dat
   # (domain-only; no CIDR source), so there are no corresponding -ipcidr
   # rule-providers for these categories.
@@ -87,9 +94,10 @@ rule-providers:
     interval: 86400
 
 rules:
-  # 1. Private/local traffic to DIRECT via Mihomo's native PRIVATE rule
-  # keyword, not custom geodata.
+  # 1. Private/local IP traffic to DIRECT via Mihomo's native PRIVATE rule
+  # keyword, and generated private domains via the rule-provider below.
   - PRIVATE,DIRECT
+  - RULE-SET,private,DIRECT
   # 2. BitTorrent traffic to BLOCK: see the NON-PARITY NOTICE above. Mihomo
   # has no native BitTorrent protocol-detection rule, so the tracker-domain
   # rule-set is applied as the strongest supported approximation, layered on

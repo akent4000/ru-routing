@@ -76,6 +76,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     )
 
     assert aireps.freshness.max_sync_lag_hours == 48
+    assert aireps.expected_categories == ("category-ru", "private")
     assert (
         policy.source_categories[
             "runetfreedom/russia-v2ray-rules-dat:win-spy"
@@ -147,8 +148,28 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
+        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
     )
+    category_scope_by_previous_policy = {
+        migration.expected_previous_policy_fingerprint: migration
+        for migration in thresholds.category_scope_migrations
+    }
+    category_scope = category_scope_by_previous_policy[
+        "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
+    ]
+    assert category_scope.expected_current_policy_fingerprint == (
+        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+    )
+    private_scope = category_scope_by_previous_policy[
+        "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
+    ]
+    assert private_scope.expected_current_policy_fingerprint == (
+        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+    )
+    assert private_scope.reset_category_keys == frozenset(
+        {"lite:private", "server:private"}
+    )
+    assert private_scope.reset_size is True
 
     with pytest.raises(FrozenInstanceError):
         aireps.url = "https://invalid.example"  # type: ignore[misc]

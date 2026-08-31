@@ -150,9 +150,14 @@ def test_xray_lite_rule_order_and_default():
     document = _load_json_template("xray-lite.json")
     rules = document["routing"]["rules"]
 
-    # Rule 1: private/local -> direct via native geoip:private.
-    assert rules[0]["ip"] == ["geoip:private"]
+    # Rules 1-2: private/local domains and IPs must be separate Xray field
+    # rules because the two predicates are conjunctive within a rule.
+    assert rules[0]["domain"] == ["ext:geosite-lite.dat:private"]
+    assert "ip" not in rules[0]
     assert rules[0]["outboundTag"] == "direct"
+    assert rules[1]["ip"] == ["geoip:private"]
+    assert "domain" not in rules[1]
+    assert rules[1]["outboundTag"] == "direct"
 
     # Every subsequent domain/ip target referencing "spy" must point to block,
     # and must appear before any "ru" rule.
@@ -184,7 +189,17 @@ def test_singbox_lite_rule_order_and_default():
     document = _load_json_template("sing-box-lite.json")
     rules = document["route"]["rules"]
 
+    private_rule_set = next(
+        rule_set
+        for rule_set in document["route"]["rule_set"]
+        if rule_set["tag"] == "private"
+    )
+    assert (
+        private_rule_set["url"]
+        == "https://routing.akent.site/latest/sing-box/lite/private.srs"
+    )
     assert rules[0]["ip_is_private"] is True
+    assert rules[0]["rule_set"] == ["private"]
     assert rules[0]["outbound"] == "direct"
 
     rule_set_order = [
@@ -209,6 +224,15 @@ def test_mihomo_lite_rule_order_and_default():
     rules = document["rules"]
 
     assert rules[0] == "PRIVATE,DIRECT"
+    assert rules[1] == "RULE-SET,private,DIRECT"
+    private_provider = document["rule-providers"]["private"]
+    assert private_provider["behavior"] == "classical"
+    assert private_provider["format"] == "yaml"
+    assert (
+        private_provider["url"]
+        == "https://routing.akent.site/latest/mihomo/lite/private.yaml"
+    )
+    assert private_provider["path"] == "./rule-providers/lite-private.yaml"
 
     def index_of(prefix):
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))
@@ -255,11 +279,15 @@ def test_xray_server_rule_order_and_default():
     document = _load_json_template("xray-server.json")
     rules = document["routing"]["rules"]
 
-    assert rules[0]["ip"] == ["geoip:private"]
+    assert rules[0]["domain"] == ["ext:geosite.dat:private"]
+    assert "ip" not in rules[0]
     assert rules[0]["outboundTag"] == "direct"
+    assert rules[1]["ip"] == ["geoip:private"]
+    assert "domain" not in rules[1]
+    assert rules[1]["outboundTag"] == "direct"
 
-    assert rules[1]["protocol"] == ["bittorrent"]
-    assert rules[1]["outboundTag"] == "block"
+    assert rules[2]["protocol"] == ["bittorrent"]
+    assert rules[2]["outboundTag"] == "block"
 
     deny_categories = {"spy", "ads"}
     deny_rule = next(
@@ -303,7 +331,17 @@ def test_singbox_server_rule_order_default_and_documents_bittorrent_nonparity():
     document = _load_json_template("sing-box-server.json")
     rules = document["route"]["rules"]
 
+    private_rule_set = next(
+        rule_set
+        for rule_set in document["route"]["rule_set"]
+        if rule_set["tag"] == "private"
+    )
+    assert (
+        private_rule_set["url"]
+        == "https://routing.akent.site/latest/sing-box/server/private.srs"
+    )
     assert rules[0]["ip_is_private"] is True
+    assert rules[0]["rule_set"] == ["private"]
     assert rules[0]["outbound"] == "direct"
 
     bt_rule = next(rule for rule in rules if rule.get("protocol") == ["bittorrent"])
@@ -337,6 +375,15 @@ def test_mihomo_server_rule_order_default_and_documents_bittorrent_nonparity():
     rules = document["rules"]
 
     assert rules[0] == "PRIVATE,DIRECT"
+    assert rules[1] == "RULE-SET,private,DIRECT"
+    private_provider = document["rule-providers"]["private"]
+    assert private_provider["behavior"] == "classical"
+    assert private_provider["format"] == "yaml"
+    assert (
+        private_provider["url"]
+        == "https://routing.akent.site/latest/mihomo/server/private.yaml"
+    )
+    assert private_provider["path"] == "./rule-providers/server-private.yaml"
 
     def index_of(prefix):
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))

@@ -4,9 +4,10 @@ sources:
     input_type: geosite_dat
     layout: single_artifact
     required: true
-    expected_categories: [category-ru]
+    expected_categories: [category-ru, private]
     category_locations:
       category-ru: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
+      private: https://github.com/aireps/geosite/releases/latest/download/geosite.dat
     attribution: aireps/geosite, synchronized from v2fly/domain-list-community
     license:
       spdx: MIT

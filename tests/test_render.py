@@ -55,10 +55,11 @@ def test_render_raw_writes_a_stable_lite_and_server_tree_atomically(tmp_path):
 
 
 def test_render_dlc_sources_preserves_domain_kinds_attributes_and_order(tmp_path):
-    report = render_dlc_sources(build().lite, tmp_path / "dlc")
+    report = render_dlc_sources(build(include_private=True).lite, tmp_path / "dlc")
 
     assert tree(tmp_path / "dlc") == {
         "blocked": "full:blocked.example @cn\n",
+        "private": "full:private.example\n",
         "ru": (
             "full:exact.example\n"
             "domain:suffix.example @attr\n"
@@ -226,7 +227,7 @@ def test_high_precedence_mihomo_regex_is_reported_as_represented(tmp_path):
     }
 
 
-def build() -> ResolvedBuild:
+def build(*, include_private: bool = False) -> ResolvedBuild:
     ru = Category(
         "ru",
         frozenset(
@@ -242,11 +243,32 @@ def build() -> ResolvedBuild:
     blocked = Category(
         "blocked", frozenset({entry(RuleKind.DOMAIN, "blocked.example", {"cn"})})
     )
-    lite = Dataset({"ru": ru, "blocked": blocked})
+    private = Category(
+        "private",
+        frozenset(
+            {
+                RuleEntry(
+                    RuleKind.CIDR,
+                    "10.0.0.0/8",
+                    frozenset({"builtin/private-networks"}),
+                    memberships=frozenset({("builtin/private-networks", "private")}),
+                ),
+                RuleEntry(
+                    RuleKind.DOMAIN,
+                    "private.example",
+                    frozenset({"aireps/geosite"}),
+                    memberships=frozenset({("aireps/geosite", "private")}),
+                ),
+            }
+        ),
+    )
+    categories = {"ru": ru, "blocked": blocked}
+    if include_private:
+        categories["private"] = private
+    lite = Dataset(categories)
     server = Dataset(
         {
-            "ru": ru,
-            "blocked": blocked,
+            **categories,
             "ru-geoip": Category(
                 "ru-geoip", frozenset({entry(RuleKind.CIDR, "2001:db8::/32")})
             ),

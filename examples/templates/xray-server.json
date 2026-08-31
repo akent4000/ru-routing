@@ -31,19 +31,25 @@
     "domainStrategy": "AsIs",
     "rules": [
       {
-        "_comment": "1. Private/local traffic to DIRECT via Xray's built-in geoip:private, not custom geodata.",
+        "_comment": "1. Private/local domains to DIRECT via the generated private geosite.",
+        "type": "field",
+        "domain": ["ext:geosite.dat:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "2. Private/local IP traffic to DIRECT via Xray's built-in geoip:private.",
         "type": "field",
         "ip": ["geoip:private"],
         "outboundTag": "direct"
       },
       {
-        "_comment": "2. BitTorrent protocol traffic to BLOCK. This is Xray's native protocol-detection rule (protocol sniffing), not a domain/IP list.",
+        "_comment": "3. BitTorrent protocol traffic to BLOCK. This is Xray's native protocol-detection rule (protocol sniffing), not a domain/IP list.",
         "type": "field",
         "protocol": ["bittorrent"],
         "outboundTag": "block"
       },
       {
-        "_comment": "3. spy and ads categories to BLOCK (domains). Both are sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there is no corresponding IP rule.",
+        "_comment": "4. spy and ads categories to BLOCK (domains). Both are sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there is no corresponding IP rule.",
         "type": "field",
         "domain": [
           "ext:geosite.dat:spy",
@@ -52,19 +58,19 @@
         "outboundTag": "block"
       },
       {
-        "_comment": "4. Example service categories (google, youtube) routed to the node-example placeholder inter-node outbound. Replace node-example before deployment.",
+        "_comment": "5. Example service categories (google, youtube) routed to the node-example placeholder inter-node outbound. Replace node-example before deployment.",
         "type": "field",
         "domain": ["ext:geosite.dat:google", "ext:geosite.dat:youtube"],
         "outboundTag": "node-example"
       },
       {
-        "_comment": "Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
+        "_comment": "6. Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
         "type": "field",
         "domain": ["ext:geosite.dat:ru", "ext:geosite.dat:ru-inside"],
         "outboundTag": "direct"
       },
       {
-        "_comment": "Reviewed RU GeoIP CIDRs to DIRECT.",
+        "_comment": "7. Reviewed RU GeoIP CIDRs to DIRECT.",
         "type": "field",
         "ip": ["ext:geoip.dat:ru-geoip"],
         "outboundTag": "direct"

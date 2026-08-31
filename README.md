@@ -17,8 +17,9 @@ normalizes conflicts, validates native artifacts, and publishes auditable
   directly.
 
 For every category shared by both datasets, validation enforces
-`server >= lite` after conflict resolution. Private/local traffic stays in each
-engine's native rules instead of being copied into custom geodata.
+`server >= lite` after conflict resolution. Private/local IP traffic stays in
+each engine's native rules, while private/local domains are published in the
+generated `private` domain artifacts; both route directly in the examples.
 
 ## Engines and artifacts
 
@@ -113,6 +114,7 @@ the policy source of truth.
 | `ru` | lite, server | domains | DIRECT |
 | `ru-global` | server | domains | trusted RU direct candidate; not in the default example |
 | `blocked` | lite, server | domains and CIDRs | PROXY, before any RU DIRECT match |
+| `private` | lite, server | domains and CIDRs | DIRECT |
 | `ru-inside` | lite, server | domains | DIRECT |
 | `ru-geoip` | server | CIDRs | DIRECT |
 | `spy` | lite, server | domains | BLOCK |
