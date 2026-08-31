@@ -211,6 +211,7 @@ jobs:
             2>&1 | tee output/publish.log
 
       - name: Write job summary
+        id: summary
         if: always()
         run: |
           {
@@ -228,6 +229,12 @@ jobs:
               echo
               echo '```json'
               python3 -c "import json; print(json.dumps(json.load(open('output/dist/manifest.json')).get('category_counts', {}), indent=2, sort_keys=True))" || true
+              echo '```'
+              echo
+              echo "### Degraded sources"
+              echo
+              echo '```json'
+              python3 -c "import json; print(json.dumps(json.load(open('output/dist/manifest.json')).get('degraded_sources', []), indent=2, sort_keys=True))" || true
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"

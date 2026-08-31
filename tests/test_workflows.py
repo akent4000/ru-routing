@@ -508,6 +508,11 @@ def test_update_job_summary_present():
     assert "GITHUB_STEP_SUMMARY" in text
 
 
+def test_update_summary_discloses_degraded_sources():
+    summary = _step_by_id(_load_yaml(UPDATE_PATH), "summary")["run"]
+    assert "degraded_sources" in summary
+
+
 def test_update_uses_docker_for_the_real_build():
     text = _raw_text(UPDATE_PATH)
     assert "docker" in text.lower()
