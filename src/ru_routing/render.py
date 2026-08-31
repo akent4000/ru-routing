@@ -60,6 +60,7 @@ _DOMAIN_KINDS = frozenset(
         RuleKind.DOMAIN_REGEX,
     }
 )
+_EMPTY_DLC_COMPATIBILITY_GROUPS = frozenset({"private"})
 _HIGH_PRECEDENCE_CATEGORIES = frozenset({"blocked", "malware", "phishing", "spy"})
 _DLC_PREFIXES = {
     RuleKind.DOMAIN: "full",
@@ -155,6 +156,10 @@ def render_dlc_sources(dataset: Dataset, path: Path) -> RepresentationReport:
                 _write_text(
                     stage / _category_source_name(category_name), _dlc_text(entries)
                 )
+        for category_name in sorted(_EMPTY_DLC_COMPATIBILITY_GROUPS):
+            path = stage / _category_source_name(category_name)
+            if not path.exists():
+                _write_text(path, "")
     return report
 
 

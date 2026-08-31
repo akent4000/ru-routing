@@ -59,6 +59,7 @@ def test_render_dlc_sources_preserves_domain_kinds_attributes_and_order(tmp_path
 
     assert tree(tmp_path / "dlc") == {
         "blocked": "full:blocked.example @cn\n",
+        "private": "",
         "ru": (
             "full:exact.example\n"
             "domain:suffix.example @attr\n"
