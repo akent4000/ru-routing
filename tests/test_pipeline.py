@@ -813,6 +813,29 @@ def test_build_excludes_quarantined_explicit_blocked_rules_before_normalization(
         source for rule in rules for source in rule.sources
     }
 
+    _replace_binary_fetch_objects_with_live_shaped_geodata(inputs)
+    dist = tmp_path / "dist"
+    assert (
+        main(
+            [
+                "build",
+                "--inputs",
+                str(inputs),
+                "--dist",
+                str(dist),
+                "--config",
+                str(CONFIG_DIR),
+                "--fake-native-tools",
+            ]
+        )
+        == 0
+    )
+    manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["degraded_sources"][0]["source"] == "jutsu-dev/ru-route-lists"
+    assert "jutsu-dev/ru-route-lists" not in {
+        item["name"] for item in manifest["sources"]
+    }
+
 
 def test_build_inputs_rejects_object_checksum_mismatch_in_metadata(tmp_path, capsys):
     fetch_dest = tmp_path / "fetched"
