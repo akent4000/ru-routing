@@ -30,8 +30,9 @@
     "domainStrategy": "AsIs",
     "rules": [
       {
-        "_comment": "1. Private/local traffic to DIRECT via Xray's built-in geoip:private, not custom geodata.",
+        "_comment": "1. Private/local domains and IP traffic to DIRECT via the generated private geosite and Xray's built-in geoip:private.",
         "type": "field",
+        "domain": ["ext:geosite-lite.dat:private"],
         "ip": ["geoip:private"],
         "outboundTag": "direct"
       },

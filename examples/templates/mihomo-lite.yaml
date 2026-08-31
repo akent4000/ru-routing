@@ -22,6 +22,13 @@ proxy-groups:
     # by the lite policy; kept for interface parity with the server example.
 
 rule-providers:
+  private:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/private-domain.mrs"
+    path: ./rule-providers/lite-private-domain.mrs
+    format: mrs
+    interval: 86400
   # spy is sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there
   # is no corresponding spy-ipcidr rule-provider.
   spy:
@@ -47,9 +54,10 @@ rule-providers:
     interval: 86400
 
 rules:
-  # 1. Private/local traffic to DIRECT via Mihomo's native PRIVATE rule
-  # keyword, not custom geodata.
+  # 1. Private/local IP traffic to DIRECT via Mihomo's native PRIVATE rule
+  # keyword, and generated private domains via the rule-provider below.
   - PRIVATE,DIRECT
+  - RULE-SET,private,DIRECT
   # 2. spy category to BLOCK (lite's only default-blocked thematic category).
   - RULE-SET,spy,REJECT
   # 3. Trusted RU and Russia-only traffic to DIRECT.
