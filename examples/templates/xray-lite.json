@@ -50,7 +50,7 @@
       {
         "_comment": "4. Trusted RU and Russia-only traffic to DIRECT.",
         "type": "field",
-        "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside"],
+        "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside", "ext:geosite-lite.dat:ru-whitelist"],
         "outboundTag": "direct"
       }
     ]

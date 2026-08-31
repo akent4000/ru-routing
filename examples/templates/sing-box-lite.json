@@ -30,6 +30,13 @@
         "format": "binary",
         "url": "{{CDN_BASE}}/sing-box/lite/ru-inside.srs",
         "download_detour": "direct"
+      },
+      {
+        "tag": "ru-whitelist",
+        "type": "remote",
+        "format": "binary",
+        "url": "{{CDN_BASE}}/sing-box/lite/ru-whitelist.srs",
+        "download_detour": "direct"
       }
     ],
     "rules": [
@@ -46,7 +53,7 @@
       },
       {
         "_comment": "3. Trusted RU and Russia-only traffic to DIRECT.",
-        "rule_set": ["ru", "ru-inside"],
+        "rule_set": ["ru", "ru-inside", "ru-whitelist"],
         "outbound": "direct"
       }
     ],

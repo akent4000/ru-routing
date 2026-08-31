@@ -19,6 +19,8 @@ INITIAL_SOURCE_IDS = frozenset(
         "jutsu-dev/ru-route-lists",
         "Loyalsoldier/v2ray-rules-dat",
         "itdoginfo/allow-domains",
+        "hydraponique/roscomvpn-geoip",
+        "kirilllavrov/RU-domain-list-for-whitelist",
         "builtin/private-networks",
     }
 )

@@ -37,7 +37,7 @@ CONFIG_DIR = REPO_ROOT / "config"
 # live-input round trip must fail if a policy starts requesting labels that the
 # actual binary producers do not publish.
 _LIVE_BINARY_CATEGORIES = {
-    "aireps/geosite": ("category-ru", "private"),
+    "aireps/geosite": ("category-ru", "whitelist", "private"),
     "runetfreedom/russia-v2ray-rules-dat": (
         "ru-blocked",
         "ru-available-only-inside",
@@ -54,10 +54,10 @@ _LIVE_BINARY_CATEGORIES = {
         "openai",
     ),
     "Loyalsoldier/v2ray-rules-dat": ("ru",),
+    "hydraponique/roscomvpn-geoip": ("direct", "whitelist"),
+    "kirilllavrov/RU-domain-list-for-whitelist": ("whitelist-ru",),
 }
-UNVERIFIED_LICENSE_SOURCES = {
-    "hydraponique/roscomvpn-geoip",
-}
+UNVERIFIED_LICENSE_SOURCES = set()
 
 
 def _run(args, monkeypatch=None):

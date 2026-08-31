@@ -52,6 +52,13 @@ rule-providers:
     path: ./rule-providers/lite-ru-inside-domain.mrs
     format: mrs
     interval: 86400
+  ru-whitelist:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/lite/ru-whitelist-domain.mrs"
+    path: ./rule-providers/lite-ru-whitelist-domain.mrs
+    format: mrs
+    interval: 86400
 
 rules:
   # 1. Private/local IP traffic to DIRECT via Mihomo's native PRIVATE rule
@@ -63,6 +70,7 @@ rules:
   # 3. Trusted RU and Russia-only traffic to DIRECT.
   - RULE-SET,ru,DIRECT
   - RULE-SET,ru-inside,DIRECT
+  - RULE-SET,ru-whitelist,DIRECT
   # 4. Unmatched traffic to PROXY (final MATCH rule): lite protects a client
   # behind a VPN, so unrecognized destinations must not silently bypass the
   # tunnel. This is also where the (server-only) 'blocked' domains/IPs land,
