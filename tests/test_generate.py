@@ -17,6 +17,7 @@ from ru_routing.validate import ValidationError, ValidationThresholds, validate_
 class FakeRunner:
     def __init__(self, *, omit: str | None = None, fail: str | None = None) -> None:
         self.calls: list[tuple[tuple[str, ...], Path]] = []
+        self.dlc_sources: dict[Path, dict[str, str]] = {}
         self._lock = threading.Lock()
         self.omit = omit
         self.fail = fail
@@ -26,6 +27,13 @@ class FakeRunner:
         working_directory = Path(cwd)
         with self._lock:
             self.calls.append((command, working_directory))
+            if command[0] == "dlc-tool":
+                datapath = Path(_flag(command, "--datapath"))
+                self.dlc_sources[datapath] = {
+                    item.relative_to(datapath).as_posix(): item.read_text()
+                    for item in sorted(datapath.rglob("*"))
+                    if item.is_file()
+                }
         if command[0] == self.fail:
             raise ToolError(f"simulated {self.fail} failure")
         output = self._output(command, working_directory)
@@ -212,6 +220,27 @@ def test_generate_all_uses_official_argv_and_publishes_complete_tree(tmp_path):
     )
     assert not (dist / ".compiler-inputs").exists()
     assert not stage.exists()
+
+
+def test_generate_all_provides_empty_private_geosite_group_to_both_dlc_builds(
+    tmp_path,
+):
+    runner = FakeRunner()
+    tools = NativeTools(
+        runner=runner,
+        dlc="dlc-tool",
+        geoip="geoip-tool",
+        sing_box="sing-box-tool",
+        mihomo="mihomo-tool",
+    )
+
+    generate_all(build(), tmp_path / "dist", tools)
+
+    assert set(runner.dlc_sources) == {
+        tmp_path / ".dist.generate/.compiler-inputs/xray/lite/geosite",
+        tmp_path / ".dist.generate/.compiler-inputs/xray/server/geosite",
+    }
+    assert all(source["private"] == "" for source in runner.dlc_sources.values())
 
 
 @pytest.mark.parametrize(
