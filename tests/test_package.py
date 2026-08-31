@@ -251,6 +251,18 @@ def test_policy_fingerprint_is_stable_for_identical_input():
     assert left == right
 
 
+def test_approved_migrations_target_current_policy_fingerprint():
+    current = policy_fingerprint(_CURRENT_POLICY_CONFIGS)
+
+    assert all(
+        migration.expected_current_policy_fingerprint == current
+        for migration in (
+            *_MIGRATION_THRESHOLDS.source_removal_migrations,
+            *_MIGRATION_THRESHOLDS.category_scope_migrations,
+        )
+    )
+
+
 # --- plan_release ---
 
 
@@ -423,7 +435,7 @@ def test_plan_release_allows_exact_upstream_private_policy_migration():
 
     assert decision.should_release is True
     assert decision.policy_fingerprint == (
-        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+        "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     )
 
 
