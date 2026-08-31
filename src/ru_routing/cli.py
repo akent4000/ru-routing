@@ -730,6 +730,18 @@ def _degraded_source_from_metadata(
 ) -> DegradedSource:
     """Validate and reconstruct one stale-source quarantine record."""
 
+    expected_fields = {
+        "excluded_from_build",
+        "max_age_hours",
+        "name",
+        "observed_freshness_age_hours",
+        "reason",
+        "status",
+    }
+    if set(document) != expected_fields:
+        raise PipelineCliError(
+            f"{source.name}: quarantine metadata has unexpected fields"
+        )
     if document.get("name") != source.name:
         raise PipelineCliError(
             f"{source.name}: quarantine metadata has an unexpected source name"

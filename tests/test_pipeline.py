@@ -19,7 +19,12 @@ from pathlib import Path
 
 import pytest
 
-from ru_routing.cli import _fetched_sources_from_inputs, _FixtureGeodataReader, main
+from ru_routing.cli import (
+    PipelineCliError,
+    _fetched_sources_from_inputs,
+    _FixtureGeodataReader,
+    main,
+)
 from ru_routing.config import load_registry
 from ru_routing.normalize import normalize_sources
 
@@ -745,6 +750,34 @@ def test_inputs_loader_accepts_quarantine_metadata_and_omits_objects(tmp_path):
         source.name for source in fetched_inputs.sources
     }
     assert fetched_inputs.degraded_sources[0].reason == "stale"
+
+
+def test_inputs_loader_rejects_quarantine_metadata_with_extra_fields(tmp_path):
+    inputs = tmp_path / "inputs"
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    assert (
+        main(
+            [
+                "fetch",
+                "--config",
+                str(CONFIG_DIR),
+                "--destination",
+                str(inputs),
+                "--offline-fixtures",
+                str(FIXTURES_DIR),
+            ]
+        )
+        == 0
+    )
+    source_name = "jutsu-dev/ru-route-lists"
+    _write_quarantine_metadata(inputs, source_name)
+    metadata_path = inputs / "metadata" / f"{source_name.replace('/', '--')}.json"
+    document = json.loads(metadata_path.read_text(encoding="utf-8"))
+    document["unexpected"] = "accepted?"
+    metadata_path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(PipelineCliError, match="unexpected fields"):
+        _fetched_sources_from_inputs(registry, inputs)
 
 
 def test_build_excludes_quarantined_explicit_blocked_rules_before_normalization(
