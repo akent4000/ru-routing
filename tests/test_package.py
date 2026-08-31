@@ -61,6 +61,35 @@ def _build_without_ru_ip() -> ResolvedBuild:
     return ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
 
 
+def _build_with_upstream_private_domains() -> ResolvedBuild:
+    builtin_cidrs = (
+        FIXTURES
+        / "upstreams/registry/builtin_private-networks--private.lst"
+    ).read_text(encoding="utf-8").splitlines()
+    entries = {
+        RuleEntry(
+            RuleKind.CIDR,
+            cidr,
+            frozenset({"builtin/private-networks"}),
+        )
+        for cidr in builtin_cidrs
+    }
+    entries.update(
+        RuleEntry(
+            RuleKind.DOMAIN,
+            f"private-{index}.example",
+            frozenset({"aireps/geosite"}),
+        )
+        for index in range(22)
+    )
+    private = Category(
+        "private",
+        frozenset(entries),
+    )
+    dataset = Dataset({"private": private})
+    return ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
+
+
 def _policy_configs(
     *, sources: bytes = b"sources-v1", categories: bytes = b"categories-v1"
 ) -> PolicyConfigs:
@@ -335,6 +364,37 @@ def test_plan_release_allows_exact_approved_source_removal_baseline_reset():
     decision = plan_release(metadata)
 
     assert decision.should_release is True
+
+
+def test_plan_release_allows_exact_upstream_private_policy_migration():
+    previous = {
+        "content_fingerprint": (
+            "0ae7a179efe8a8ab9b6f4db88dc717fc2b8f12dfab8a5401d97f4feab6f1b766"
+        ),
+        "policy_fingerprint": (
+            "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
+        ),
+        "category_counts": {"lite:private": 21, "server:private": 21},
+        "total_size_bytes": 289_029_891,
+    }
+    build = _build_with_upstream_private_domains()
+    metadata = BuildMetadata(
+        build=build,
+        policy_configs=_CURRENT_POLICY_CONFIGS,
+        sources=(_fetched_source("aireps/geosite"),),
+        conflicts=build.conflicts,
+        thresholds=_MIGRATION_THRESHOLDS,
+        previous_manifest=previous,
+        built_at="2026-08-31T12:34:00+00:00",
+        tool_versions={"xray": "1.0.0"},
+    )
+
+    decision = plan_release(metadata)
+
+    assert decision.should_release is True
+    assert decision.policy_fingerprint == (
+        "d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f"
+    )
 
 
 def test_plan_release_still_blocks_unrelated_anomaly_during_source_removal():

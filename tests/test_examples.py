@@ -226,11 +226,13 @@ def test_mihomo_lite_rule_order_and_default():
     assert rules[0] == "PRIVATE,DIRECT"
     assert rules[1] == "RULE-SET,private,DIRECT"
     private_provider = document["rule-providers"]["private"]
-    assert private_provider["behavior"] == "domain"
+    assert private_provider["behavior"] == "classical"
+    assert private_provider["format"] == "yaml"
     assert (
         private_provider["url"]
-        == "https://routing.akent.site/latest/mihomo/lite/private-domain.mrs"
+        == "https://routing.akent.site/latest/mihomo/lite/private.yaml"
     )
+    assert private_provider["path"] == "./rule-providers/lite-private.yaml"
 
     def index_of(prefix):
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))
@@ -375,11 +377,13 @@ def test_mihomo_server_rule_order_default_and_documents_bittorrent_nonparity():
     assert rules[0] == "PRIVATE,DIRECT"
     assert rules[1] == "RULE-SET,private,DIRECT"
     private_provider = document["rule-providers"]["private"]
-    assert private_provider["behavior"] == "domain"
+    assert private_provider["behavior"] == "classical"
+    assert private_provider["format"] == "yaml"
     assert (
         private_provider["url"]
-        == "https://routing.akent.site/latest/mihomo/server/private-domain.mrs"
+        == "https://routing.akent.site/latest/mihomo/server/private.yaml"
     )
+    assert private_provider["path"] == "./rule-providers/server-private.yaml"
 
     def index_of(prefix):
         return next(i for i, rule in enumerate(rules) if rule.startswith(prefix))

@@ -35,10 +35,10 @@ proxy-groups:
 rule-providers:
   private:
     type: http
-    behavior: domain
-    url: "{{CDN_BASE}}/mihomo/server/private-domain.mrs"
-    path: ./rule-providers/server-private-domain.mrs
-    format: mrs
+    behavior: classical
+    url: "{{CDN_BASE}}/mihomo/server/private.yaml"
+    path: ./rule-providers/server-private.yaml
+    format: yaml
     interval: 86400
   # spy and ads are sourced from runetfreedom/russia-v2ray-rules-dat
   # (domain-only; no CIDR source), so there are no corresponding -ipcidr

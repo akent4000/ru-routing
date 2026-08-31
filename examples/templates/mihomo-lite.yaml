@@ -24,10 +24,10 @@ proxy-groups:
 rule-providers:
   private:
     type: http
-    behavior: domain
-    url: "{{CDN_BASE}}/mihomo/lite/private-domain.mrs"
-    path: ./rule-providers/lite-private-domain.mrs
-    format: mrs
+    behavior: classical
+    url: "{{CDN_BASE}}/mihomo/lite/private.yaml"
+    path: ./rule-providers/lite-private.yaml
+    format: yaml
     interval: 86400
   # spy is sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there
   # is no corresponding spy-ipcidr rule-provider.

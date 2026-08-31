@@ -6,12 +6,15 @@ import threading
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ru_routing.generate import GenerationError, NativeTools, generate_all
 from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
 from ru_routing.resolve import ConflictReport, ResolvedBuild
 from ru_routing.tooling import CompletedTool, ToolError, ToolRunner
 from ru_routing.validate import ValidationError, ValidationThresholds, validate_build
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "examples" / "templates"
 
 
 class FakeRunner:
@@ -243,6 +246,75 @@ def test_generate_all_provides_upstream_private_domain_to_both_dlc_builds(
     assert all(
         source["private"] == "full:private.example\n"
         for source in runner.dlc_sources.values()
+    )
+
+
+@pytest.mark.parametrize(
+    ("dataset_name", "template_name"),
+    (("lite", "mihomo-lite.yaml"), ("server", "mihomo-server.yaml")),
+)
+def test_generate_all_publishes_regex_safe_private_provider_used_by_mihomo_example(
+    dataset_name,
+    template_name,
+    tmp_path,
+):
+    pattern = r"^(.*\.)?private\.example$"
+    private = Category(
+        "private",
+        frozenset(
+            {
+                RuleEntry(
+                    RuleKind.CIDR,
+                    "10.0.0.0/8",
+                    frozenset({"builtin/private-networks"}),
+                    memberships=frozenset(
+                        {("builtin/private-networks", "private")}
+                    ),
+                ),
+                RuleEntry(
+                    RuleKind.DOMAIN_REGEX,
+                    pattern,
+                    frozenset({"aireps/geosite"}),
+                    memberships=frozenset({("aireps/geosite", "private")}),
+                ),
+            }
+        ),
+    )
+    dataset = Dataset({"private": private})
+    rendered = ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
+    dist = tmp_path / "dist"
+
+    generated = generate_all(
+        rendered,
+        dist,
+        NativeTools(
+            runner=FakeRunner(),
+            dlc="dlc-tool",
+            geoip="geoip-tool",
+            sing_box="sing-box-tool",
+            mihomo="mihomo-tool",
+        ),
+    )
+
+    cdn_base = "https://routing.akent.site/latest"
+    template = yaml.safe_load(
+        (TEMPLATES_DIR / template_name)
+        .read_text(encoding="utf-8")
+        .replace("{{VERSION}}", "2026.08.31.0000-deadbeef")
+        .replace("{{CDN_BASE}}", cdn_base)
+    )
+    provider = template["rule-providers"]["private"]
+    assert provider["behavior"] == "classical"
+    assert provider["format"] == "yaml"
+    relative_path = provider["url"].removeprefix(f"{cdn_base}/")
+    assert relative_path == f"mihomo/{dataset_name}/private.yaml"
+    assert relative_path in generated.relative_paths
+    assert f"DOMAIN-REGEX,{pattern}" in yaml.safe_load(
+        (dist / relative_path).read_text(encoding="utf-8")
+    )["payload"]
+    assert not any(
+        path == f"mihomo/{dataset_name}/private-domain.mrs"
+        for path in generated.relative_paths
     )
 
 

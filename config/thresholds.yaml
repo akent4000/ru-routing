@@ -39,3 +39,9 @@ category_scope_migrations:
       - lite:blocked
       - lite:ads
     reset_size: true
+  - expected_previous_policy_fingerprint: ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d
+    expected_current_policy_fingerprint: d3b3d6f6d0c1b1d69f3c1378cac546e0fe3f4166c3338358e8d2e1a49e959e9f
+    reset_category_keys:
+      - lite:private
+      - server:private
+    reset_size: true
