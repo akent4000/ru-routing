@@ -127,12 +127,18 @@ the policy source of truth.
 | `meta` | server | domains | optional service route |
 | `github` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
+| `ru-whitelist` | lite, server | domains | curated RU direct whitelist (banks, marketplaces, government-linked services) from `aireps/geosite:whitelist` and `kirilllavrov/RU-domain-list-for-whitelist:whitelist-ru`; DIRECT |
+| `ru-direct-geoip` | server | CIDRs | direct CIDR candidates from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside plain `geoip:ru`; DIRECT |
 
-`hydraponique/roscomvpn-geoip` and `itdoginfo/allow-domains` are excluded from
-the source registry until their upstream redistribution licenses can be
-verified. Consequently, `ru` is currently domain-only, the server-only
-`ru-geoip` category is the reviewed RU CIDR source, and `ru-services` is not
-published. See [LICENSES.md](LICENSES.md) for the evidence and re-enable policy.
+`itdoginfo/allow-domains`, `hydraponique/roscomvpn-geoip`, and
+`kirilllavrov/RU-domain-list-for-whitelist` are included in the source
+registry under an SPDX `NOASSERTION` license status: their upstreams declare
+no verifiable redistribution license, so they are consumed with attribution
+under a maintainer decision rather than a confirmed grant. `ru` is currently
+domain-only from sources with confirmed licenses; the server-only `ru-geoip`
+category is the license-reviewed RU CIDR source; `ru-direct-geoip` is the
+NOASSERTION direct-CIDR candidate layer; `ru-services` is not published. See
+[LICENSES.md](LICENSES.md) for the evidence and re-review policy.
 
 Policy precedence is deny (`spy`), explicit `blocked`, trusted RU direct, then
 thematic categories. A blocked entry is never allowed to remain in a
