@@ -222,7 +222,7 @@ def test_generate_all_uses_official_argv_and_publishes_complete_tree(tmp_path):
     assert not stage.exists()
 
 
-def test_generate_all_provides_empty_private_geosite_group_to_both_dlc_builds(
+def test_generate_all_provides_upstream_private_domain_to_both_dlc_builds(
     tmp_path,
 ):
     runner = FakeRunner()
@@ -234,13 +234,16 @@ def test_generate_all_provides_empty_private_geosite_group_to_both_dlc_builds(
         mihomo="mihomo-tool",
     )
 
-    generate_all(build(), tmp_path / "dist", tools)
+    generate_all(build(include_private=True), tmp_path / "dist", tools)
 
     assert set(runner.dlc_sources) == {
         tmp_path / ".dist.generate/.compiler-inputs/xray/lite/geosite",
         tmp_path / ".dist.generate/.compiler-inputs/xray/server/geosite",
     }
-    assert all(source["private"] == "" for source in runner.dlc_sources.values())
+    assert all(
+        source["private"] == "full:private.example\n"
+        for source in runner.dlc_sources.values()
+    )
 
 
 @pytest.mark.parametrize(
@@ -427,14 +430,37 @@ def test_pinned_docker_tools_compile_and_load_domain_and_cidr_for_every_engine(
         )
 
 
-def build() -> ResolvedBuild:
+def build(*, include_private: bool = False) -> ResolvedBuild:
     blocked = Category(
         "blocked", frozenset({_entry(RuleKind.DOMAIN, "blocked.example")})
     )
     ru_ip = Category(
         "ru-ip", frozenset({_entry(RuleKind.CIDR, "203.0.113.0/24")})
     )
-    dataset = Dataset({"blocked": blocked, "ru-ip": ru_ip})
+    categories = {"blocked": blocked, "ru-ip": ru_ip}
+    if include_private:
+        categories["private"] = Category(
+            "private",
+            frozenset(
+                {
+                    RuleEntry(
+                        RuleKind.CIDR,
+                        "10.0.0.0/8",
+                        frozenset({"builtin/private-networks"}),
+                        memberships=frozenset(
+                            {("builtin/private-networks", "private")}
+                        ),
+                    ),
+                    RuleEntry(
+                        RuleKind.DOMAIN,
+                        "private.example",
+                        frozenset({"aireps/geosite"}),
+                        memberships=frozenset({("aireps/geosite", "private")}),
+                    ),
+                }
+            ),
+        )
+    dataset = Dataset(categories)
     return ResolvedBuild(dataset, dataset, ConflictReport((), (), ()))
 
 

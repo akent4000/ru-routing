@@ -76,6 +76,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     )
 
     assert aireps.freshness.max_sync_lag_hours == 48
+    assert aireps.expected_categories == ("category-ru", "private")
     assert (
         policy.source_categories[
             "runetfreedom/russia-v2ray-rules-dat:win-spy"

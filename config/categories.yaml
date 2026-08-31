@@ -1,5 +1,6 @@
 mappings:
   - {source: aireps/geosite, source_category: category-ru, canonical_category: ru-global, datasets: [server], tier: trusted_direct}
+  - {source: aireps/geosite, source_category: private, canonical_category: private, datasets: [lite, server], tier: trusted_direct}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru-blocked, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: ru-available-only-inside, canonical_category: ru-inside, datasets: [lite, server], tier: trusted_direct}
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: category-ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
