@@ -10,7 +10,8 @@
       {"tag": "google", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/google.srs", "download_detour": "direct"},
       {"tag": "youtube", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/youtube.srs", "download_detour": "direct"},
       {"tag": "ru", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru.srs", "download_detour": "direct"},
-      {"tag": "ru-inside", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru-inside.srs", "download_detour": "direct"}
+      {"tag": "ru-inside", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru-inside.srs", "download_detour": "direct"},
+      {"tag": "ru-whitelist", "type": "remote", "format": "binary", "url": "{{CDN_BASE}}/sing-box/server/ru-whitelist.srs", "download_detour": "direct"}
     ],
     "rules": [
       {
@@ -36,7 +37,7 @@
       },
       {
         "_comment": "Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
-        "rule_set": ["ru", "ru-inside"],
+        "rule_set": ["ru", "ru-inside", "ru-whitelist"],
         "outbound": "direct"
       }
     ],

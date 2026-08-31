@@ -66,13 +66,13 @@
       {
         "_comment": "6. Trusted RU and Russia-only traffic to DIRECT, matching the shared lite/server policy base.",
         "type": "field",
-        "domain": ["ext:geosite.dat:ru", "ext:geosite.dat:ru-inside"],
+        "domain": ["ext:geosite.dat:ru", "ext:geosite.dat:ru-inside", "ext:geosite.dat:ru-whitelist"],
         "outboundTag": "direct"
       },
       {
-        "_comment": "7. Reviewed RU GeoIP CIDRs to DIRECT.",
+        "_comment": "7. Reviewed RU GeoIP CIDRs to DIRECT: ru-geoip plus ru-direct-geoip (roscomvpn-geoip-derived direct CIDR candidates).",
         "type": "field",
-        "ip": ["ext:geoip.dat:ru-geoip"],
+        "ip": ["ext:geoip.dat:ru-geoip", "ext:geoip.dat:ru-direct-geoip"],
         "outboundTag": "direct"
       }
     ]

@@ -92,6 +92,13 @@ rule-providers:
     path: ./rule-providers/server-ru-inside-domain.mrs
     format: mrs
     interval: 86400
+  ru-whitelist:
+    type: http
+    behavior: domain
+    url: "{{CDN_BASE}}/mihomo/server/ru-whitelist-domain.mrs"
+    path: ./rule-providers/server-ru-whitelist-domain.mrs
+    format: mrs
+    interval: 86400
 
 rules:
   # 1. Private/local IP traffic to DIRECT via Mihomo's native PRIVATE rule
@@ -115,6 +122,7 @@ rules:
   # lite/server policy base.
   - RULE-SET,ru,DIRECT
   - RULE-SET,ru-inside,DIRECT
+  - RULE-SET,ru-whitelist,DIRECT
   # 5. Unmatched traffic to DIRECT (final MATCH rule): the server dataset
   # runs on the egress node itself, so a conservative PROXY-style default
   # would misroute the node's own general traffic. Exceptions are handled by
