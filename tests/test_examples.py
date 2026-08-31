@@ -150,11 +150,14 @@ def test_xray_lite_rule_order_and_default():
     document = _load_json_template("xray-lite.json")
     rules = document["routing"]["rules"]
 
-    # Rule 1: private/local -> direct via generated private domains and
-    # native geoip:private addresses.
+    # Rules 1-2: private/local domains and IPs must be separate Xray field
+    # rules because the two predicates are conjunctive within a rule.
     assert rules[0]["domain"] == ["ext:geosite-lite.dat:private"]
-    assert rules[0]["ip"] == ["geoip:private"]
+    assert "ip" not in rules[0]
     assert rules[0]["outboundTag"] == "direct"
+    assert rules[1]["ip"] == ["geoip:private"]
+    assert "domain" not in rules[1]
+    assert rules[1]["outboundTag"] == "direct"
 
     # Every subsequent domain/ip target referencing "spy" must point to block,
     # and must appear before any "ru" rule.
@@ -275,11 +278,14 @@ def test_xray_server_rule_order_and_default():
     rules = document["routing"]["rules"]
 
     assert rules[0]["domain"] == ["ext:geosite.dat:private"]
-    assert rules[0]["ip"] == ["geoip:private"]
+    assert "ip" not in rules[0]
     assert rules[0]["outboundTag"] == "direct"
+    assert rules[1]["ip"] == ["geoip:private"]
+    assert "domain" not in rules[1]
+    assert rules[1]["outboundTag"] == "direct"
 
-    assert rules[1]["protocol"] == ["bittorrent"]
-    assert rules[1]["outboundTag"] == "block"
+    assert rules[2]["protocol"] == ["bittorrent"]
+    assert rules[2]["outboundTag"] == "block"
 
     deny_categories = {"spy", "ads"}
     deny_rule = next(

@@ -30,20 +30,25 @@
     "domainStrategy": "AsIs",
     "rules": [
       {
-        "_comment": "1. Private/local domains and IP traffic to DIRECT via the generated private geosite and Xray's built-in geoip:private.",
+        "_comment": "1. Private/local domains to DIRECT via the generated private geosite.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "_comment": "2. Private/local IP traffic to DIRECT via Xray's built-in geoip:private.",
+        "type": "field",
         "ip": ["geoip:private"],
         "outboundTag": "direct"
       },
       {
-        "_comment": "2. spy category to BLOCK (lite's only default-blocked thematic category). spy is sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there is no corresponding IP rule.",
+        "_comment": "3. spy category to BLOCK (lite's only default-blocked thematic category). spy is sourced from runetfreedom/russia-v2ray-rules-dat (domain-only; no CIDR source), so there is no corresponding IP rule.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:spy"],
         "outboundTag": "block"
       },
       {
-        "_comment": "3. Trusted RU and Russia-only traffic to DIRECT.",
+        "_comment": "4. Trusted RU and Russia-only traffic to DIRECT.",
         "type": "field",
         "domain": ["ext:geosite-lite.dat:ru", "ext:geosite-lite.dat:ru-inside"],
         "outboundTag": "direct"
