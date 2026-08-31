@@ -8,7 +8,10 @@ import pytest
 import yaml
 
 import ru_routing.render as render_module
-from ru_routing.models import Category, Dataset, RuleEntry, RuleKind
+from ru_routing.config import CanonicalCategoryPolicy, CategoryMapping, CategoryPolicy
+from ru_routing.models import Category, Dataset, PolicyTier, RuleEntry, RuleKind
+from ru_routing.normalize import normalize_rule
+from ru_routing.parsers import RawRule
 from ru_routing.render import (
     render_dlc_sources,
     render_geoip_config,
@@ -17,7 +20,7 @@ from ru_routing.render import (
     render_singbox_json,
     representation_report,
 )
-from ru_routing.resolve import ConflictReport, ResolvedBuild
+from ru_routing.resolve import ConflictReport, ResolvedBuild, resolve_datasets
 
 
 def test_render_raw_writes_a_stable_lite_and_server_tree_atomically(tmp_path):
@@ -225,6 +228,74 @@ def test_high_precedence_mihomo_regex_is_reported_as_represented(tmp_path):
     assert yaml.safe_load(render_mihomo_yaml(spy.categories["spy"])) == {
         "payload": [r"DOMAIN-REGEX,^bad\\.example$"]
     }
+
+
+@pytest.mark.parametrize(
+    ("suffix", "subdomain"),
+    [
+        ("ozon.ru", "xapi.ozon.ru"),
+        ("ozonusercontent.com", "cdn1.ozonusercontent.com"),
+    ],
+)
+def test_domain_suffix_semantics_survive_parse_through_every_engine_render(
+    suffix, subdomain, tmp_path
+):
+    """A `domain:` rule (e.g. `domain:ozon.ru`) must render as a suffix match
+    in every target engine, not degrade into an exact-only rule -- otherwise
+    subdomains such as `xapi.ozon.ru` silently stop matching DIRECT."""
+
+    raw = RawRule(
+        source="aireps/geosite",
+        category="whitelist",
+        kind=RuleKind.DOMAIN_SUFFIX,
+        value=suffix,
+        path=Path("fixture"),
+        line=1,
+    )
+    normalized = normalize_rule(raw)
+    assert normalized.kind == RuleKind.DOMAIN_SUFFIX
+
+    policy = CategoryPolicy(
+        source_categories={
+            "aireps/geosite:whitelist": CategoryMapping(
+                "aireps/geosite",
+                "whitelist",
+                "ru-whitelist",
+                frozenset({"lite", "server"}),
+                PolicyTier.TRUSTED_DIRECT,
+            ),
+        },
+        canonical_categories={
+            "ru-whitelist": CanonicalCategoryPolicy(
+                "ru-whitelist", frozenset({"lite", "server"}), PolicyTier.TRUSTED_DIRECT
+            ),
+        },
+    )
+
+    resolved = resolve_datasets((normalized,), policy)
+    category = resolved.lite.categories["ru-whitelist"]
+    assert category.entries == frozenset({normalized})
+
+    # Xray dlc source rendering must keep the `domain:` suffix prefix, not
+    # degrade to `full:` (exact-only) or drop the prefix entirely.
+    render_dlc_sources(resolved.lite, tmp_path / "dlc")
+    dlc_text = (tmp_path / "dlc" / "ru-whitelist").read_text(encoding="utf-8")
+    assert dlc_text == f"domain:{suffix}\n"
+
+    # sing-box: suffix values belong under domain_suffix, never bare domain.
+    singbox_rules = json.loads(render_singbox_json(category))["rules"][0]
+    assert singbox_rules.get("domain_suffix") == [suffix]
+    assert suffix not in singbox_rules.get("domain", [])
+
+    # Mihomo: DOMAIN-SUFFIX, not DOMAIN (which would be exact-match only).
+    mihomo_payload = yaml.safe_load(render_mihomo_yaml(category))["payload"]
+    assert f"DOMAIN-SUFFIX,{suffix}" in mihomo_payload
+    assert f"DOMAIN,{suffix}" not in mihomo_payload
+
+    # The subdomain is not itself a listed rule; suffix semantics (not an
+    # exact match) is what makes it covered, and that's exactly what all
+    # three engines were just shown to preserve above.
+    assert subdomain.endswith(f".{suffix}")
 
 
 def build(*, include_private: bool = False) -> ResolvedBuild:
