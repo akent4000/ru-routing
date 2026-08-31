@@ -31,7 +31,7 @@ CONFIG_DIR = REPO_ROOT / "config"
 # live-input round trip must fail if a policy starts requesting labels that the
 # actual binary producers do not publish.
 _LIVE_BINARY_CATEGORIES = {
-    "aireps/geosite": ("category-ru",),
+    "aireps/geosite": ("category-ru", "private"),
     "runetfreedom/russia-v2ray-rules-dat": (
         "ru-blocked",
         "ru-available-only-inside",
