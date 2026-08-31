@@ -127,8 +127,8 @@ the policy source of truth.
 | `meta` | server | domains | optional service route |
 | `github` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
-| `ru-whitelist` | lite, server | domains | curated RU direct whitelist (banks, marketplaces, government-linked services) from `aireps/geosite:whitelist` and `kirilllavrov/RU-domain-list-for-whitelist:whitelist-ru`; DIRECT |
-| `ru-direct-geoip` | server | CIDRs | direct CIDR candidates from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside plain `geoip:ru`; DIRECT |
+| `ru-whitelist` | lite, server | domains | DIRECT; from `aireps/geosite:whitelist` and `kirilllavrov/RU-domain-list-for-whitelist:whitelist-ru` |
+| `ru-direct-geoip` | server | CIDRs | DIRECT; from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside `ru-geoip` |
 
 `itdoginfo/allow-domains`, `hydraponique/roscomvpn-geoip`, and
 `kirilllavrov/RU-domain-list-for-whitelist` are included in the source
