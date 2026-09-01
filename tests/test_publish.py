@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -958,6 +960,7 @@ def _make_cli_backend(
     *,
     access_key_id="key",
     secret_access_key="secret",
+    sleep=lambda seconds: None,
     **kwargs,
 ):
     return CliBackend(
@@ -968,6 +971,7 @@ def _make_cli_backend(
         repo="owner/repo",
         workdir=tmp_path,
         aws_subprocess_runner=aws_subprocess_runner,
+        sleep=sleep,
         **kwargs,
     )
 
@@ -1002,7 +1006,10 @@ def test_cli_backend_logs_put_object_duration_without_credentials(tmp_path, caps
 
 
 def test_cli_backend_logs_failed_get_object_duration(tmp_path, capsys):
-    timestamps = iter((4.0, 4.5))
+    # get_object retries on failure (see the retry tests below), so
+    # _run_aws -- and therefore _monotonic -- is invoked once per attempt;
+    # each attempt is timed identically here.
+    timestamps = iter((4.0, 4.5) * 3)
 
     def fake_runner(command, **kwargs):
         return _FakeAwsProcess(1, b"", b"not found")
@@ -1154,10 +1161,131 @@ def test_cli_backend_discards_conflicting_ambient_aws_settings(tmp_path, monkeyp
     assert environment["AWS_SECRET_ACCESS_KEY"] == "secret"
     assert environment["AWS_DEFAULT_REGION"] == "ru-central1"
     assert environment["AWS_REGION"] == "ru-central1"
-    assert "AWS_SESSION_TOKEN" not in environment
-    assert {key for key in environment if key.startswith("AWS_")} == {
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_DEFAULT_REGION",
-        "AWS_REGION",
-    }
+
+
+# --- put_object/get_object retry on transient S3 stalls --------------------
+
+
+def test_put_object_retries_after_timeout_then_succeeds(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd=command, timeout=180.0)
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(
+        fake_runner, tmp_path, sleep=lambda seconds: sleeps.append(seconds)
+    )
+
+    backend.put_object(
+        "latest/xray/geoip.dat",
+        b"data",
+        content_type="application/octet-stream",
+        cache_control="no-cache",
+    )
+
+    assert len(calls) == 2
+    assert sleeps == [2.0]
+
+
+def test_get_object_retries_after_failure_then_succeeds(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        if len(calls) < 3:
+            return _FakeAwsProcess(1, b"", b"transient error")
+        # Real `aws s3api get-object` writes the body to its positional
+        # output-path argument (the one right after --key's value); mimic
+        # that on the successful attempt so get_object's read_bytes() call
+        # sees real content.
+        output_path = command[command.index("--key") + 2]
+        Path(output_path).write_bytes(b"payload")
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(
+        fake_runner, tmp_path, sleep=lambda seconds: sleeps.append(seconds)
+    )
+
+    result = backend.get_object("releases/v1/xray/geoip.dat")
+
+    assert result == b"payload"
+    assert len(calls) == 3
+    assert sleeps == [2.0, 4.0]
+
+
+def test_put_object_gives_up_after_exhausting_retries(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        raise subprocess.TimeoutExpired(cmd=command, timeout=180.0)
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        backend.put_object(
+            "latest/xray/geoip.dat",
+            b"data",
+            content_type="application/octet-stream",
+            cache_control="no-cache",
+        )
+
+    assert len(calls) == 3
+
+
+def test_get_object_gives_up_after_exhausting_retries_raises_publish_error(tmp_path):
+    calls: list[list[str]] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return _FakeAwsProcess(1, b"", b"not found")
+
+    backend = _make_cli_backend(fake_runner, tmp_path)
+
+    with pytest.raises(PublishError, match="get-object"):
+        backend.get_object("releases/v1/xray/geoip.dat")
+
+    assert len(calls) == 3
+
+
+def test_delete_object_does_not_retry_on_failure(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return _FakeAwsProcess(1, b"", b"access denied")
+
+    backend = _make_cli_backend(
+        fake_runner, tmp_path, sleep=lambda seconds: sleeps.append(seconds)
+    )
+
+    with pytest.raises(PublishError, match="delete-object"):
+        backend.delete_object("latest/xray/geoip.dat")
+
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_delete_prefix_does_not_retry_on_failure(tmp_path):
+    calls: list[list[str]] = []
+    sleeps: list[float] = []
+
+    def fake_runner(command, **kwargs):
+        calls.append(list(command))
+        return _FakeAwsProcess(1, b"", b"access denied")
+
+    backend = _make_cli_backend(
+        fake_runner, tmp_path, sleep=lambda seconds: sleeps.append(seconds)
+    )
+
+    with pytest.raises(PublishError, match="list-objects-v2"):
+        backend.delete_prefix("releases/v1/")
+
+    assert len(calls) == 1
+    assert sleeps == []

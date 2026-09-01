@@ -58,6 +58,16 @@ _IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _REVALIDATE_CACHE_CONTROL = "public, max-age=300, must-revalidate"
 _S3_MAX_WORKERS = 8
 
+# GitHub Actions runners egress from US/EU datacenters; Yandex Object
+# Storage (ru-central1) is a long, sometimes congested hop away. Most
+# put/get calls land in 1-3s, but a small fraction stall well past that --
+# transient routing/congestion, not a permanent failure. put_object/
+# get_object retry through this; delete_object/delete_prefix do not (see
+# CliBackend docstring).
+_S3_SUBPROCESS_TIMEOUT_SECONDS = 180.0
+_S3_RETRY_ATTEMPTS = 3
+_S3_RETRY_BASE_DELAY_SECONDS = 2.0
+
 
 class PublishError(RuntimeError):
     """Raised when publication or rollback cannot complete successfully.
@@ -792,6 +802,7 @@ class CliBackend:
         workdir: Path | None = None,
         aws_subprocess_runner=subprocess.run,
         monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._yandex_s3 = yandex_s3
         self._repo = repo
@@ -804,6 +815,10 @@ class CliBackend:
         # out to a real `aws` binary; production code never overrides this.
         self._aws_subprocess_runner = aws_subprocess_runner
         self._monotonic = monotonic
+        # Injectable so tests can exercise _run_aws_with_retry's backoff
+        # loop without actually sleeping; production code never overrides
+        # this.
+        self._sleep = sleep
 
     def _aws_env(self) -> dict[str, str]:
         return {
@@ -843,7 +858,7 @@ class CliBackend:
                 check=False,
                 shell=False,
                 text=False,
-                timeout=60.0,
+                timeout=_S3_SUBPROCESS_TIMEOUT_SECONDS,
             )
             if completed.returncode != 0:
                 stderr = completed.stderr.decode("utf-8", errors="replace")
@@ -855,6 +870,33 @@ class CliBackend:
         finally:
             _log_s3_timing(operation, key, self._monotonic() - started_at)
 
+    def _run_aws_with_retry(self, argv: Sequence[str]) -> str:
+        """Like ``_run_aws``, but retries a transient timeout/failure.
+
+        Used only by ``put_object``/``get_object`` -- the per-file hot path
+        that a slow Yandex S3 response can otherwise turn into an
+        immediate, whole-publication failure. ``delete_object``/
+        ``delete_prefix`` call ``_run_aws`` directly: they run only on the
+        cleanup path, where blind retries add risk (masking a persistent
+        permissions error behind repeated attempts) for little benefit.
+
+        A persistent failure (bad credentials, missing key, etc.) still
+        fails every attempt and is raised after the last one -- this only
+        absorbs single transient stalls, not real errors.
+        """
+
+        last_error: Exception | None = None
+        for attempt in range(_S3_RETRY_ATTEMPTS):
+            try:
+                return self._run_aws(argv)
+            except (subprocess.TimeoutExpired, PublishError) as error:
+                last_error = error
+                if attempt == _S3_RETRY_ATTEMPTS - 1:
+                    break
+                self._sleep(_S3_RETRY_BASE_DELAY_SECONDS * 2**attempt)
+        assert last_error is not None
+        raise last_error
+
     def put_object(
         self, key: str, data: bytes, *, content_type: str, cache_control: str
     ) -> None:
@@ -862,7 +904,7 @@ class CliBackend:
             handle.write(data)
             body_path = handle.name
         try:
-            self._run_aws(
+            self._run_aws_with_retry(
                 [
                     "put-object",
                     "--bucket",
@@ -884,7 +926,7 @@ class CliBackend:
         with tempfile.NamedTemporaryFile(delete=False) as handle:
             output_path = handle.name
         try:
-            self._run_aws(
+            self._run_aws_with_retry(
                 [
                     "get-object",
                     "--bucket",
