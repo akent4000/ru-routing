@@ -5,6 +5,7 @@ import pytest
 
 from ru_routing.cli import main
 from ru_routing.config import ConfigError, load_policy, load_registry, load_thresholds
+from ru_routing.models import RuleKind
 
 EXPECTED_SOURCES = {
     "aireps/geosite",
@@ -61,12 +62,45 @@ def test_registry_rejects_reintroduced_source_without_license_review(
 def test_every_source_is_required_mapped_and_license_reviewed():
     registry = load_registry(Path("config/sources.yaml"))
     policy = load_policy(Path("config/categories.yaml"))
+    itdog = registry.resolve("itdoginfo/allow-domains")
 
     assert {source.name for source in registry.sources} == EXPECTED_SOURCES
+    assert itdog.bare_domain_kind == RuleKind.DOMAIN_SUFFIX
     assert all(source.required for source in registry.sources)
     assert all(source.license.spdx for source in registry.sources)
     assert all(source.license.redistribution_reviewed for source in registry.sources)
     assert set(policy.source_categories) == registry.declared_category_keys()
+
+
+@pytest.mark.parametrize(
+    ("replacement", "value", "error"),
+    [
+        (
+            "input_type: geosite_dat\n    layout: single_artifact",
+            "input_type: geosite_dat\n    bare_domain_kind: domain_suffix\n"
+            "    layout: single_artifact",
+            "bare_domain_kind is only valid for plain_text sources",
+        ),
+        (
+            "bare_domain_kind: domain_suffix",
+            "bare_domain_kind: unsupported",
+            "bare_domain_kind must be one of: domain, domain_suffix",
+        ),
+    ],
+)
+def test_registry_rejects_invalid_bare_domain_kind(
+    replacement, value, error, tmp_path
+):
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        Path("config/sources.yaml").read_text(encoding="utf-8").replace(
+            replacement, value, 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=error):
+        load_registry(path)
 
 
 def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():

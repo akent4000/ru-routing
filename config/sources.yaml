@@ -74,6 +74,7 @@ sources:
   - name: itdoginfo/allow-domains
     url: https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-raw.lst
     input_type: plain_text
+    bare_domain_kind: domain_suffix
     layout: per_category_urls
     required: true
     expected_categories: [russia-outside]

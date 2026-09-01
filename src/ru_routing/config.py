@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from .models import PolicyTier
+from .models import PolicyTier, RuleKind
 
 INITIAL_SOURCE_IDS = frozenset(
     {
@@ -90,6 +90,7 @@ class SourceDefinition:
     attribution: str
     license: LicenseMetadata
     freshness: FreshnessRule
+    bare_domain_kind: RuleKind = RuleKind.DOMAIN
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "expected_categories", tuple(self.expected_categories))
@@ -356,22 +357,33 @@ def load_registry(path: Path) -> SourceRegistry:
         context = f"sources[{index}]"
         if not isinstance(raw_source, dict):
             raise ConfigError(f"{context} must be a mapping")
-        _require_fields(
-            raw_source,
-            {
-                "name",
-                "url",
-                "input_type",
-                "layout",
-                "required",
-                "expected_categories",
-                "category_locations",
-                "attribution",
-                "license",
-                "freshness",
-            },
-            context,
+        required_source_fields = {
+            "name",
+            "url",
+            "input_type",
+            "layout",
+            "required",
+            "expected_categories",
+            "category_locations",
+            "attribution",
+            "license",
+            "freshness",
+        }
+        optional_source_fields = {"bare_domain_kind"}
+        missing_source_fields = required_source_fields - set(raw_source)
+        unknown_source_fields = set(raw_source) - (
+            required_source_fields | optional_source_fields
         )
+        if missing_source_fields:
+            raise ConfigError(
+                f"{context} is missing fields: "
+                f"{', '.join(sorted(missing_source_fields))}"
+            )
+        if unknown_source_fields:
+            raise ConfigError(
+                f"{context} has unknown fields: "
+                f"{', '.join(sorted(unknown_source_fields))}"
+            )
         name = _string(raw_source["name"], f"{context}.name")
         if name in names:
             raise ConfigError(f"duplicate source name: {name}")
@@ -396,6 +408,26 @@ def load_registry(path: Path) -> SourceRegistry:
             raise ConfigError(f"{context}.input_type is not supported")
         if layout not in SUPPORTED_SOURCE_LAYOUTS[input_type]:
             raise ConfigError(f"{context}.layout is not valid for {input_type}")
+        has_bare_domain_kind = "bare_domain_kind" in raw_source
+        if has_bare_domain_kind and input_type != "plain_text":
+            raise ConfigError(
+                f"{context}.bare_domain_kind is only valid for plain_text sources"
+            )
+        bare_domain_kind_by_name = {
+            "domain": RuleKind.DOMAIN,
+            "domain_suffix": RuleKind.DOMAIN_SUFFIX,
+        }
+        if not has_bare_domain_kind:
+            bare_domain_kind = RuleKind.DOMAIN
+        else:
+            bare_domain_kind_name = _string(
+                raw_source["bare_domain_kind"], f"{context}.bare_domain_kind"
+            )
+            if bare_domain_kind_name not in bare_domain_kind_by_name:
+                raise ConfigError(
+                    f"{context}.bare_domain_kind must be one of: domain, domain_suffix"
+                )
+            bare_domain_kind = bare_domain_kind_by_name[bare_domain_kind_name]
         category_locations = _category_locations(
             raw_source["category_locations"],
             categories,
@@ -453,6 +485,7 @@ def load_registry(path: Path) -> SourceRegistry:
                         else None
                     ),
                 ),
+                bare_domain_kind=bare_domain_kind,
             )
         )
     if names != INITIAL_SOURCE_IDS:
