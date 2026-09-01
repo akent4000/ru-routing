@@ -338,7 +338,9 @@ def _parse_plain_text(
     source: SourceDefinition, paths: Mapping[str, tuple[Path, ...]]
 ) -> Iterable[RawRule]:
     parsed_lists = {
-        category: _read_list(source.name, category, category_paths)
+        category: _read_list(
+            source.name, source.bare_domain_kind, category, category_paths
+        )
         for category, category_paths in paths.items()
     }
     parsed_lists = _materialize_affiliations(parsed_lists)
@@ -385,7 +387,10 @@ def _materialize_affiliations(
 
 
 def _read_list(
-    source: str, category: str, paths: tuple[Path, ...]
+    source: str,
+    bare_domain_kind: RuleKind,
+    category: str,
+    paths: tuple[Path, ...],
 ) -> _ParsedList:
     entries: list[RawRule] = []
     inclusions: list[_Inclusion] = []
@@ -397,7 +402,9 @@ def _read_list(
         except OSError as error:
             raise ParseError(f"{source}: {path}: cannot read input") from error
         for line_number, line in enumerate(lines, start=1):
-            item = _parse_line(source, category, path, line_number, line)
+            item = _parse_line(
+                source, bare_domain_kind, category, path, line_number, line
+            )
             if isinstance(item, RawRule):
                 entries.append(item)
             elif item is not None:
@@ -406,7 +413,12 @@ def _read_list(
 
 
 def _parse_line(
-    source: str, category: str, path: Path, line_number: int, line: str
+    source: str,
+    bare_domain_kind: RuleKind,
+    category: str,
+    path: Path,
+    line_number: int,
+    line: str,
 ) -> RawRule | _Inclusion | None:
     text = line.partition("#")[0].strip()
     if not text:
@@ -424,7 +436,7 @@ def _parse_line(
     elif separator and "/" not in raw_value:
         _raise(source, path, line_number, f"unsupported rule kind {prefix!r}")
     else:
-        kind = RuleKind.CIDR if "/" in raw_value else RuleKind.DOMAIN
+        kind = RuleKind.CIDR if "/" in raw_value else bare_domain_kind
         value = raw_value
     attributes, affiliations = _parse_entry_fields(
         source, path, line_number, fields[1:]

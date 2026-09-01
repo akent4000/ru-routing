@@ -63,6 +63,7 @@ def source(
     input_type="plain_text",
     layout="per_category_urls",
     categories=("rules",),
+    bare_domain_kind=RuleKind.DOMAIN,
 ):
     return SourceDefinition(
         name="fixture/source",
@@ -77,6 +78,7 @@ def source(
         attribution="Fixture contributors",
         license=LicenseMetadata("MIT", True),
         freshness=FreshnessRule(max_age_hours=48),
+        bare_domain_kind=bare_domain_kind,
     )
 
 
@@ -116,6 +118,21 @@ def test_parse_source_adapts_plain_and_domain_list_rules(fixture, expected):
     assert [(rule.kind, rule.value) for rule in rules] == expected
     assert {rule.source for rule in rules} == {"fixture/source"}
     assert {rule.category for rule in rules} == {"rules"}
+
+
+def test_parse_source_uses_source_bare_domain_kind_for_plain_hostnames(tmp_path):
+    path = tmp_path / "rules.txt"
+    path.write_text("ozon.ru\n", encoding="utf-8")
+
+    rules = tuple(
+        parse_source(
+            source(bare_domain_kind=RuleKind.DOMAIN_SUFFIX), {"rules": (path,)}
+        )
+    )
+
+    assert [(rule.kind, rule.value) for rule in rules] == [
+        (RuleKind.DOMAIN_SUFFIX, "ozon.ru")
+    ]
 
 
 def test_parse_source_rejects_unknown_domain_list_rule_with_source_and_line(tmp_path):

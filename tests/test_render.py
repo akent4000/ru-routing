@@ -8,10 +8,16 @@ import pytest
 import yaml
 
 import ru_routing.render as render_module
-from ru_routing.config import CanonicalCategoryPolicy, CategoryMapping, CategoryPolicy
+from ru_routing.config import (
+    CanonicalCategoryPolicy,
+    CategoryMapping,
+    CategoryPolicy,
+    load_policy,
+    load_registry,
+)
 from ru_routing.models import Category, Dataset, PolicyTier, RuleEntry, RuleKind
 from ru_routing.normalize import normalize_rule
-from ru_routing.parsers import RawRule
+from ru_routing.parsers import RawRule, parse_source
 from ru_routing.render import (
     render_dlc_sources,
     render_geoip_config,
@@ -21,6 +27,10 @@ from ru_routing.render import (
     representation_report,
 )
 from ru_routing.resolve import ConflictReport, ResolvedBuild, resolve_datasets
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = REPO_ROOT / "config"
+FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "upstreams" / "registry"
 
 
 def test_render_raw_writes_a_stable_lite_and_server_tree_atomically(tmp_path):
@@ -71,6 +81,29 @@ def test_render_dlc_sources_preserves_domain_kinds_attributes_and_order(tmp_path
         ),
     }
     assert all(item.represented for item in report.entries)
+
+
+def test_fixture_itdog_lite_dlc_source_renders_ozon_as_domain_suffix(tmp_path):
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    source = registry.resolve("itdoginfo/allow-domains")
+    rules = parse_source(
+        source,
+        {
+            "russia-outside": (
+                FIXTURES_DIR / "itdoginfo_allow-domains--russia-outside.lst",
+            )
+        },
+    )
+    resolved = resolve_datasets(
+        tuple(normalize_rule(rule) for rule in rules),
+        load_policy(CONFIG_DIR / "categories.yaml"),
+    )
+
+    render_dlc_sources(resolved.lite, tmp_path / "dlc")
+
+    assert "domain:ozon.ru\n" in (tmp_path / "dlc" / "ru-inside").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_render_geoip_config_uses_inline_cidrs_and_deterministic_v2fly_schema(tmp_path):
