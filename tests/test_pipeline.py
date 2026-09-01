@@ -725,6 +725,8 @@ def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["release_version"]
     assert manifest["category_counts"]["lite:ru"] == 1
+    assert manifest["category_counts"]["lite:ru-geoip"] == 1
+    assert manifest["category_counts"]["lite:ru-direct-geoip"] == 2
     assert manifest["category_counts"]["server:ru-geoip"] == 1
 
 

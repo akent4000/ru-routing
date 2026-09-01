@@ -116,7 +116,7 @@ the policy source of truth.
 | `blocked` | lite, server | domains and CIDRs | PROXY, before any RU DIRECT match |
 | `private` | lite, server | domains and CIDRs | DIRECT |
 | `ru-inside` | lite, server | domains | DIRECT |
-| `ru-geoip` | server | CIDRs | DIRECT |
+| `ru-geoip` | lite, server | CIDRs | DIRECT |
 | `spy` | lite, server | domains | BLOCK |
 | `ads` | lite, server | domains | lite opt-in; server BLOCK |
 | `trackers` | lite, server | domains | optional tracker policy; Mihomo uses REJECT as its BitTorrent approximation |
@@ -128,15 +128,15 @@ the policy source of truth.
 | `github` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
 | `ru-whitelist` | lite, server | domains | DIRECT; from `aireps/geosite:whitelist` and `kirilllavrov/RU-domain-list-for-whitelist:whitelist-ru` |
-| `ru-direct-geoip` | server | CIDRs | DIRECT; from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside `ru-geoip` |
+| `ru-direct-geoip` | lite, server | CIDRs | DIRECT; from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside `ru-geoip` |
 
 `itdoginfo/allow-domains`, `hydraponique/roscomvpn-geoip`, and
 `kirilllavrov/RU-domain-list-for-whitelist` are included in the source
 registry under an SPDX `NOASSERTION` license status: their upstreams declare
 no verifiable redistribution license, so they are consumed with attribution
 under a maintainer decision rather than a confirmed grant. `ru` is currently
-domain-only from sources with confirmed licenses; the server-only `ru-geoip`
-category is the license-reviewed RU CIDR source; `ru-direct-geoip` is the
+domain-only from sources with confirmed licenses; `ru-geoip` is the
+license-reviewed RU CIDR source; `ru-direct-geoip` is the
 NOASSERTION direct-CIDR candidate layer; `ru-services` is not published. See
 [LICENSES.md](LICENSES.md) for the evidence and re-review policy.
 

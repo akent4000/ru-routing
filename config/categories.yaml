@@ -17,9 +17,9 @@ mappings:
   - {source: runetfreedom/russia-v2ray-rules-dat, source_category: openai, canonical_category: ai, datasets: [server], tier: thematic}
   - {source: jutsu-dev/ru-route-lists, source_category: blocked-domains, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
   - {source: jutsu-dev/ru-route-lists, source_category: blocked-cidrs, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
-  - {source: Loyalsoldier/v2ray-rules-dat, source_category: ru, canonical_category: ru-geoip, datasets: [server], tier: trusted_direct}
+  - {source: Loyalsoldier/v2ray-rules-dat, source_category: ru, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
   - {source: itdoginfo/allow-domains, source_category: russia-outside, canonical_category: ru-inside, datasets: [lite, server], tier: trusted_direct}
-  - {source: hydraponique/roscomvpn-geoip, source_category: direct, canonical_category: ru-direct-geoip, datasets: [server], tier: trusted_direct}
-  - {source: hydraponique/roscomvpn-geoip, source_category: whitelist, canonical_category: ru-direct-geoip, datasets: [server], tier: trusted_direct}
+  - {source: hydraponique/roscomvpn-geoip, source_category: direct, canonical_category: ru-direct-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: hydraponique/roscomvpn-geoip, source_category: whitelist, canonical_category: ru-direct-geoip, datasets: [lite, server], tier: trusted_direct}
   - {source: kirilllavrov/RU-domain-list-for-whitelist, source_category: whitelist-ru, canonical_category: ru-whitelist, datasets: [lite, server], tier: trusted_direct}
   - {source: builtin/private-networks, source_category: private, canonical_category: private, datasets: [lite, server], tier: trusted_direct}
