@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import replace
 
 import pytest
@@ -44,6 +45,36 @@ from ru_routing.publish import (
 )
 
 _RELATIVE_PATHS = ("index.html", "xray/geoip.dat", "sing-box/lite/example.json")
+
+
+class _BlockingImmutableBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_immutable_puts = 0
+        self.max_active_immutable_puts = 0
+        self.first_immutable_put_started = threading.Event()
+        self.eight_immutable_puts_started = threading.Event()
+        self.release_immutable_puts = threading.Event()
+        self._lock = threading.Lock()
+
+    def put_object(
+        self, key: str, data: bytes, *, content_type: str, cache_control: str
+    ) -> None:
+        if key.startswith("releases/") and not key.endswith("manifest.json"):
+            with self._lock:
+                self.active_immutable_puts += 1
+                self.max_active_immutable_puts = max(
+                    self.max_active_immutable_puts, self.active_immutable_puts
+                )
+                self.first_immutable_put_started.set()
+                if self.active_immutable_puts == 8:
+                    self.eight_immutable_puts_started.set()
+            self.release_immutable_puts.wait(timeout=5)
+            with self._lock:
+                self.active_immutable_puts -= 1
+        super().put_object(
+            key, data, content_type=content_type, cache_control=cache_control
+        )
 
 
 def _content_for(version: str, relative: str) -> bytes:
@@ -108,6 +139,64 @@ def _plan(tmp_path, version: str, *, previous_manifest=None) -> PublishPlan:
         archive_path=archive_path,
         previous_manifest=previous_manifest,
     )
+
+
+def _many_object_plan(tmp_path, version: str, count: int = 9) -> PublishPlan:
+    checksums = {
+        f"xray/object-{index}.dat": hashlib.sha256(
+            _content_for(version, f"xray/object-{index}.dat")
+        ).hexdigest()
+        for index in range(count)
+    }
+    manifest = _manifest(version, checksums=checksums)
+    dist, archive_path = _write_dist(tmp_path, manifest)
+    return PublishPlan(
+        manifest=manifest,
+        dist=dist,
+        archive_path=archive_path,
+        previous_manifest=None,
+    )
+
+
+def test_publish_release_limits_immutable_uploads_to_eight_workers(tmp_path):
+    backend = _BlockingImmutableBackend()
+    plan = _many_object_plan(tmp_path, "2026.09.01.0000-parallel")
+    result: list[BaseException | str] = []
+
+    def publish() -> None:
+        try:
+            result.append(publish_release(plan, backend))
+        except BaseException as error:  # pragma: no cover - assertion below
+            result.append(error)
+
+    worker = threading.Thread(target=publish)
+    worker.start()
+    assert backend.first_immutable_put_started.wait(timeout=1)
+    try:
+        assert backend.eight_immutable_puts_started.wait(timeout=1)
+        assert backend.max_active_immutable_puts == 8
+    finally:
+        backend.release_immutable_puts.set()
+        worker.join(timeout=5)
+
+    assert result == [plan.manifest.release_version]
+
+
+def test_publish_release_defers_latest_until_immutable_uploads_finish(tmp_path):
+    backend = _BlockingImmutableBackend()
+    plan = _many_object_plan(tmp_path, "2026.09.01.0001-barrier")
+    result: list[BaseException | str] = []
+
+    worker = threading.Thread(
+        target=lambda: result.append(publish_release(plan, backend))
+    )
+    worker.start()
+    assert backend.first_immutable_put_started.wait(timeout=1)
+    assert not any(key.startswith("latest/") for _, key in backend.put_log)
+    backend.release_immutable_puts.set()
+    worker.join(timeout=5)
+
+    assert result == [plan.manifest.release_version]
 
 
 def _seed_prior_release(backend: FakeBackend, version: str) -> Manifest:
@@ -863,16 +952,72 @@ class _FakeAwsProcess:
         self.stderr = stderr
 
 
-def _make_cli_backend(aws_subprocess_runner, tmp_path):
+def _make_cli_backend(
+    aws_subprocess_runner,
+    tmp_path,
+    *,
+    access_key_id="key",
+    secret_access_key="secret",
+    **kwargs,
+):
     return CliBackend(
         yandex_s3=YandexS3Credentials(
-            access_key_id="key",
-            secret_access_key="secret",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
         ),
         repo="owner/repo",
         workdir=tmp_path,
         aws_subprocess_runner=aws_subprocess_runner,
+        **kwargs,
     )
+
+
+def test_cli_backend_logs_put_object_duration_without_credentials(tmp_path, capsys):
+    timestamps = iter((10.0, 11.25))
+
+    def fake_runner(command, **kwargs):
+        return _FakeAwsProcess(0, b"")
+
+    backend = _make_cli_backend(
+        fake_runner,
+        tmp_path,
+        access_key_id="TEST_ACCESS_KEY",
+        secret_access_key="TEST_SECRET_KEY",
+        monotonic=lambda: next(timestamps),
+    )
+
+    backend.put_object(
+        "latest/xray/geoip.dat",
+        b"data",
+        content_type="application/octet-stream",
+        cache_control="no-cache",
+    )
+
+    output = capsys.readouterr().out
+    assert "operation=put-object" in output
+    assert "key=latest/xray/geoip.dat" in output
+    assert "duration_seconds=1.250" in output
+    assert "TEST_ACCESS_KEY" not in output
+    assert "TEST_SECRET_KEY" not in output
+
+
+def test_cli_backend_logs_failed_get_object_duration(tmp_path, capsys):
+    timestamps = iter((4.0, 4.5))
+
+    def fake_runner(command, **kwargs):
+        return _FakeAwsProcess(1, b"", b"not found")
+
+    backend = _make_cli_backend(
+        fake_runner, tmp_path, monotonic=lambda: next(timestamps)
+    )
+
+    with pytest.raises(PublishError, match="get-object"):
+        backend.get_object("releases/v1/xray/geoip.dat")
+
+    output = capsys.readouterr().out
+    assert "operation=get-object" in output
+    assert "key=releases/v1/xray/geoip.dat" in output
+    assert "duration_seconds=0.500" in output
 
 
 def test_cli_backend_delete_prefix_paginates_across_multiple_pages(tmp_path):

@@ -45,15 +45,18 @@ import json
 import os
 import subprocess
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import Callable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .package import Manifest
 from .tooling import ToolRunner
 
 _IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _REVALIDATE_CACHE_CONTROL = "public, max-age=300, must-revalidate"
+_S3_MAX_WORKERS = 8
 
 
 class PublishError(RuntimeError):
@@ -253,7 +256,7 @@ def _content_type(relative: str) -> str:
 def _upload_and_verify_release_tree(
     backend: PublishBackend, version: str, specs: Sequence[_ObjectSpec]
 ) -> None:
-    for spec in specs:
+    def upload_and_verify(spec: _ObjectSpec) -> None:
         key = f"releases/{version}/{spec.key}"
         backend.put_object(
             key,
@@ -269,11 +272,13 @@ def _upload_and_verify_release_tree(
                 f"read-back verification failed for releases/{version}/{spec.key}"
             )
 
+    _run_parallel_specs(specs, upload_and_verify)
+
 
 def _copy_specs_to_latest(
     backend: PublishBackend, specs: Sequence[_ObjectSpec]
 ) -> None:
-    for spec in specs:
+    def copy_to_latest(spec: _ObjectSpec) -> None:
         key = f"latest/{spec.key}"
         backend.put_object(
             key,
@@ -281,6 +286,17 @@ def _copy_specs_to_latest(
             content_type=spec.content_type,
             cache_control=_REVALIDATE_CACHE_CONTROL,
         )
+
+    _run_parallel_specs(specs, copy_to_latest)
+
+
+def _run_parallel_specs(
+    specs: Sequence[_ObjectSpec], operation: Callable[[_ObjectSpec], None]
+) -> None:
+    with ThreadPoolExecutor(max_workers=_S3_MAX_WORKERS) as executor:
+        futures = [executor.submit(operation, spec) for spec in specs]
+        for future in futures:
+            future.result()
 
 
 def _copy_prefix_to_latest(
@@ -307,20 +323,29 @@ def _copy_prefix_to_latest(
             )
         verified.append((relative, content, expected_hash))
 
+    failures: list[str] = []
     for relative, content, expected_hash in verified:
         destination_key = f"latest/{relative}"
-        backend.put_object(
-            destination_key,
-            content,
-            content_type=_content_type(relative),
-            cache_control=_REVALIDATE_CACHE_CONTROL,
-        )
-        readback = backend.get_object(destination_key)
-        if hashlib.sha256(readback).hexdigest() != expected_hash:
-            raise PublishError(
-                f"read-back verification failed while restoring latest/{relative} "
-                f"from releases/{version}/"
+        try:
+            backend.put_object(
+                destination_key,
+                content,
+                content_type=_content_type(relative),
+                cache_control=_REVALIDATE_CACHE_CONTROL,
             )
+            readback = backend.get_object(destination_key)
+            if hashlib.sha256(readback).hexdigest() != expected_hash:
+                raise PublishError(
+                    f"read-back verification failed while restoring latest/{relative} "
+                    f"from releases/{version}/"
+                )
+        except Exception as error:
+            failures.append(f"latest/{relative}: {error}")
+
+    if failures:
+        raise PublishError(
+            "failed to restore one or more latest objects: " + "; ".join(failures)
+        )
 
 
 def _copy_index_to_root(
@@ -766,6 +791,7 @@ class CliBackend:
         aws: str = "aws",
         workdir: Path | None = None,
         aws_subprocess_runner=subprocess.run,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._yandex_s3 = yandex_s3
         self._repo = repo
@@ -777,6 +803,7 @@ class CliBackend:
         # delete_prefix's list-objects-v2 pagination loop) without shelling
         # out to a real `aws` binary; production code never overrides this.
         self._aws_subprocess_runner = aws_subprocess_runner
+        self._monotonic = monotonic
 
     def _aws_env(self) -> dict[str, str]:
         return {
@@ -804,23 +831,29 @@ class CliBackend:
             "--endpoint-url",
             self._yandex_s3.endpoint_url,
         ]
-        completed = self._aws_subprocess_runner(
-            command,
-            cwd=self._workdir,
-            env=self._aws_env(),
-            capture_output=True,
-            check=False,
-            shell=False,
-            text=False,
-            timeout=60.0,
-        )
-        if completed.returncode != 0:
-            stderr = completed.stderr.decode("utf-8", errors="replace")
-            raise PublishError(
-                f"aws s3api {' '.join(argv[:2])} failed with status "
-                f"{completed.returncode}: {stderr}"
+        operation = argv[0] if argv else "unknown"
+        key = argv[argv.index("--key") + 1] if "--key" in argv else "-"
+        started_at = self._monotonic()
+        try:
+            completed = self._aws_subprocess_runner(
+                command,
+                cwd=self._workdir,
+                env=self._aws_env(),
+                capture_output=True,
+                check=False,
+                shell=False,
+                text=False,
+                timeout=60.0,
             )
-        return completed.stdout
+            if completed.returncode != 0:
+                stderr = completed.stderr.decode("utf-8", errors="replace")
+                raise PublishError(
+                    f"aws s3api {' '.join(argv[:2])} failed with status "
+                    f"{completed.returncode}: {stderr}"
+                )
+            return completed.stdout
+        finally:
+            _log_s3_timing(operation, key, self._monotonic() - started_at)
 
     def put_object(
         self, key: str, data: bytes, *, content_type: str, cache_control: str
@@ -973,3 +1006,17 @@ class CliBackend:
             ],
             cwd=self._workdir,
         )
+
+
+def _log_s3_timing(operation: str, key: str, duration_seconds: float) -> None:
+    """Write a best-effort, credential-safe AWS operation duration to stdout."""
+
+    try:
+        print(
+            "ru-routing: s3 "
+            f"operation={operation} key={key} duration_seconds={duration_seconds:.3f}"
+        )
+    except OSError:
+        # A logging failure must not change publication state after the
+        # manifest pointer write has succeeded.
+        pass
