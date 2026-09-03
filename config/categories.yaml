@@ -23,3 +23,5 @@ mappings:
   - {source: hydraponique/roscomvpn-geoip, source_category: whitelist, canonical_category: ru-direct-geoip, datasets: [lite, server], tier: trusted_direct}
   - {source: kirilllavrov/RU-domain-list-for-whitelist, source_category: whitelist-ru, canonical_category: ru-whitelist, datasets: [lite, server], tier: trusted_direct}
   - {source: builtin/private-networks, source_category: private, canonical_category: private, datasets: [lite, server], tier: trusted_direct}
+  - {source: Hipo/university-domains-list, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: local/universities-ru-overlay, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}

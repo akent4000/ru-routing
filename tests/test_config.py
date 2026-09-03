@@ -64,12 +64,41 @@ def test_every_source_is_required_mapped_and_license_reviewed():
     policy = load_policy(Path("config/categories.yaml"))
     itdog = registry.resolve("itdoginfo/allow-domains")
 
-    assert {source.name for source in registry.sources} == EXPECTED_SOURCES
+    assert {source.name for source in registry.sources} == EXPECTED_SOURCES | {
+        "Hipo/university-domains-list",
+        "local/universities-ru-overlay",
+    }
+    assert (
+        policy.source_categories[
+            "Hipo/university-domains-list:ru"
+        ].canonical_category
+        == "ru"
+    )
+    assert (
+        policy.source_categories["local/universities-ru-overlay:ru"].datasets
+        == frozenset({"lite", "server"})
+    )
     assert itdog.bare_domain_kind == RuleKind.DOMAIN_SUFFIX
     assert all(source.required for source in registry.sources)
     assert all(source.license.spdx for source in registry.sources)
     assert all(source.license.redistribution_reviewed for source in registry.sources)
     assert set(policy.source_categories) == registry.declared_category_keys()
+
+
+@pytest.mark.parametrize("location", ["/tmp/universities-ru.txt", "../overlay.txt"])
+def test_registry_rejects_non_repository_relative_local_text_locations(
+    location, tmp_path
+):
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        Path("config/sources.yaml")
+        .read_text(encoding="utf-8")
+        .replace("ru: config/overlays/universities-ru.txt", f"ru: {location}"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="repository-relative path"):
+        load_registry(path)
 
 
 @pytest.mark.parametrize(

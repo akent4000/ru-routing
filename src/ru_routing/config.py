@@ -22,6 +22,8 @@ INITIAL_SOURCE_IDS = frozenset(
         "hydraponique/roscomvpn-geoip",
         "kirilllavrov/RU-domain-list-for-whitelist",
         "builtin/private-networks",
+        "Hipo/university-domains-list",
+        "local/universities-ru-overlay",
     }
 )
 
@@ -29,6 +31,8 @@ SUPPORTED_SOURCE_LAYOUTS = {
     "geoip_dat": frozenset({"single_artifact"}),
     "geosite_dat": frozenset({"single_artifact"}),
     "plain_text": frozenset({"per_category_urls", "release_assets"}),
+    "university_domains_json": frozenset({"single_artifact"}),
+    "local_text": frozenset({"repository_file"}),
     "builtin": frozenset({"per_category_urls"}),
 }
 
@@ -320,8 +324,19 @@ def _https_url(value: Any, context: str) -> str:
     return url
 
 
+def _repository_relative_location(value: Any, context: str) -> str:
+    location = _string(value, context)
+    path = Path(location)
+    if path.is_absolute() or ".." in path.parts:
+        raise ConfigError(f"{context} must be a repository-relative path")
+    return location
+
+
 def _category_locations(
-    value: Any, categories: tuple[str, ...], context: str
+    value: Any,
+    categories: tuple[str, ...],
+    context: str,
+    location_validator: Any,
 ) -> Mapping[str, tuple[str, ...]]:
     if not isinstance(value, dict):
         raise ConfigError(f"{context} must be a mapping")
@@ -332,9 +347,10 @@ def _category_locations(
         if isinstance(raw_locations, str):
             raw_locations = [raw_locations]
         if not isinstance(raw_locations, list) or not raw_locations:
-            raise ConfigError(f"{context}.{category} must be a non-empty URL list")
+            raise ConfigError(f"{context}.{category} must be a non-empty location list")
         category_locations = tuple(
-            _https_url(location, f"{context}.{category}") for location in raw_locations
+            location_validator(location, f"{context}.{category}")
+            for location in raw_locations
         )
         if len(set(category_locations)) != len(category_locations):
             raise ConfigError(f"{context}.{category} contains duplicate URLs")
@@ -432,6 +448,11 @@ def load_registry(path: Path) -> SourceRegistry:
             raw_source["category_locations"],
             categories,
             f"{context}.category_locations",
+            (
+                _repository_relative_location
+                if input_type == "local_text"
+                else _https_url
+            ),
         )
         if layout == "single_artifact" and any(
             locations != (url,) for locations in category_locations.values()

@@ -129,3 +129,31 @@ sources:
       redistribution_reviewed: true
     freshness:
       max_age_hours: 8760
+  - name: Hipo/university-domains-list
+    url: https://raw.githubusercontent.com/Hipo/university-domains-list/master/world_universities_and_domains.json
+    input_type: university_domains_json
+    layout: single_artifact
+    required: true
+    expected_categories: [ru]
+    category_locations:
+      ru: https://raw.githubusercontent.com/Hipo/university-domains-list/master/world_universities_and_domains.json
+    attribution: Hipo/university-domains-list contributors
+    license:
+      spdx: MIT
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 168
+  - name: local/universities-ru-overlay
+    url: https://github.com/akent4000/ru-routing/blob/main/config/overlays/universities-ru.txt
+    input_type: local_text
+    layout: repository_file
+    required: true
+    expected_categories: [ru]
+    category_locations:
+      ru: config/overlays/universities-ru.txt
+    attribution: ru-routing maintainers
+    license:
+      spdx: NOASSERTION
+      redistribution_reviewed: true
+    freshness:
+      max_age_hours: 8760
