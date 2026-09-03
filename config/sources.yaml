@@ -142,7 +142,7 @@ sources:
       spdx: MIT
       redistribution_reviewed: true
     freshness:
-      max_age_hours: 168
+      max_age_hours: 8760
   - name: local/universities-ru-overlay
     url: https://github.com/akent4000/ru-routing/blob/main/config/overlays/universities-ru.txt
     input_type: local_text
