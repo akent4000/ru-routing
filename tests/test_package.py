@@ -43,9 +43,18 @@ def test_license_inventory_records_hipo_mit_evidence():
     inventory = Path("src/ru_routing/license_material/LICENSES.md").read_text(
         encoding="utf-8"
     )
+    license_text = Path(
+        "src/ru_routing/license_material/upstream/hipo-university-domains-list/LICENSE"
+    ).read_text(encoding="utf-8")
 
     assert "Hipo/university-domains-list" in inventory
-    assert "MIT" in inventory
+    assert (
+        "https://github.com/Hipo/university-domains-list/blob/master/LICENSE.txt"
+        in inventory
+    )
+    assert license_text.startswith(
+        "The MIT License (MIT)\n\nCopyright (c) 2014-2025 Hipo\n"
+    )
 
 
 def _entry(kind: RuleKind, value: str) -> RuleEntry:
