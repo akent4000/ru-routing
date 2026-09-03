@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import ru_routing.fetch as fetch_module
 from ru_routing.config import (
     FreshnessRule,
     LicenseMetadata,
@@ -37,8 +38,99 @@ def source(
     )
 
 
+def local_source(location="config/overlays/universities-ru.txt"):
+    return SourceDefinition(
+        name="local/universities-ru-overlay",
+        url=(
+            "https://github.com/akent4000/ru-routing/blob/main/"
+            "config/overlays/universities-ru.txt"
+        ),
+        input_type="local_text",
+        layout="repository_file",
+        required=True,
+        expected_categories=("ru",),
+        category_locations={"ru": (location,)},
+        attribution="ru-routing maintainers",
+        license=LicenseMetadata("NOASSERTION", True),
+        freshness=FreshnessRule(max_age_hours=8760),
+    )
+
+
 def client(handler):
     return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_fetches_local_text_into_content_addressed_metadata_without_http(
+    tmp_path, monkeypatch
+):
+    repository_root = tmp_path / "repository"
+    location = "config/overlays/universities-ru.txt"
+    body = b"sso.example.edu\n"
+    overlay = repository_root / location
+    overlay.parent.mkdir(parents=True)
+    overlay.write_bytes(body)
+    monkeypatch.setattr(fetch_module, "_REPOSITORY_ROOT", repository_root)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        pytest.fail(f"local source must not request HTTP: {request.url}")
+
+    fetched = fetch_all(
+        SourceRegistry((local_source(location),)), tmp_path / "inputs", client(handler)
+    )
+
+    digest = hashlib.sha256(body).hexdigest()
+    item = fetched.sources[0]
+    assert item.object_paths["ru"][0].read_text(encoding="utf-8") == "sso.example.edu\n"
+    assert item.resolved_revision == digest
+    assert item.sha256 == digest
+    assert requests == []
+    metadata_path = (
+        tmp_path / "inputs" / "metadata" / "local--universities-ru-overlay.json"
+    )
+    assert json.loads(
+        metadata_path.read_text(encoding="utf-8")
+    ) == {
+        "attribution": "ru-routing maintainers",
+        "license": {"redistribution_reviewed": True, "spdx": "NOASSERTION"},
+        "name": "local/universities-ru-overlay",
+        "objects": {"ru": [{"path": f"objects/{digest}", "sha256": digest}]},
+        "observed_freshness_lag_hours": None,
+        "observed_freshness_age_hours": 0.0,
+        "resolved_revision": digest,
+        "sha256": digest,
+    }
+
+
+@pytest.mark.parametrize("location", ["/tmp/universities-ru.txt", "../overlay.txt"])
+def test_local_text_locations_cannot_escape_the_repository_root(tmp_path, location):
+    with pytest.raises(
+        FetchError,
+        match=r"local/universities-ru-overlay.*repository-relative location",
+    ):
+        fetch_all(
+            SourceRegistry((local_source(location),)),
+            tmp_path / "inputs",
+            client(lambda request: pytest.fail(f"unexpected request: {request.url}")),
+        )
+
+
+def test_missing_local_text_file_names_source_and_location(tmp_path, monkeypatch):
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+    location = "config/overlays/missing.txt"
+    monkeypatch.setattr(fetch_module, "_REPOSITORY_ROOT", repository_root)
+
+    with pytest.raises(
+        FetchError,
+        match=r"local/universities-ru-overlay.*config/overlays/missing\.txt",
+    ):
+        fetch_all(
+            SourceRegistry((local_source(location),)),
+            tmp_path / "inputs",
+            client(lambda request: pytest.fail(f"unexpected request: {request.url}")),
+        )
 
 
 def test_fetches_a_pinned_raw_input_to_a_content_addressed_object_and_metadata(

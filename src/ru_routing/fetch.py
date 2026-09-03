@@ -25,6 +25,7 @@ _MAX_RETRIES = 3
 _RETRY_DELAY_SECONDS = 0.1
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GITHUB_RAW_HOST = "raw.githubusercontent.com"
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 # The exact `privateCIDRs` list from v2fly/geoip's plugin/special/private.go
 # (the canonical upstream source for Xray-core's built-in `geoip:private`),
@@ -179,6 +180,19 @@ def _fetch_source(
     _validate_license(source)
     if source.input_type == "builtin":
         return _fetch_builtin_source(source, objects_dir, metadata_dir)
+    if source.input_type == "local_text":
+        try:
+            return _fetch_local_text_source(
+                source, objects_dir, metadata_dir, _REPOSITORY_ROOT
+            )
+        except FetchError as error:
+            raise FetchError(
+                f"fetch failed for source {source.name}: {error}"
+            ) from error
+        except (OSError, ValueError) as error:
+            raise FetchError(
+                f"fetch failed for source {source.name}: local input failed"
+            ) from error
     try:
         release = _resolve_release(source, client)
         if release is None:
@@ -245,6 +259,65 @@ def _fetch_builtin_source(
             target.write_bytes(content)
         paths[category] = (target,)
         object_digests.append(digest)
+    source_digest = _source_digest(tuple(object_digests))
+    fetched = FetchedSource(
+        name=source.name,
+        resolved_revision=source_digest,
+        sha256=source_digest,
+        license=source.license,
+        object_paths=paths,
+        observed_freshness_lag_hours=None,
+    )
+    _write_metadata(metadata_dir, source, fetched, 0.0, tuple(object_digests))
+    return fetched
+
+
+def _fetch_local_text_source(
+    source: SourceDefinition,
+    objects_dir: Path,
+    metadata_dir: Path,
+    repository_root: Path,
+) -> FetchedSource:
+    """Materialize repository-owned text without consulting the network."""
+
+    root = repository_root.resolve()
+    materialized: dict[str, tuple[Path, str]] = {}
+    paths: dict[str, tuple[Path, ...]] = {}
+    object_digests: list[str] = []
+    for category, locations in source.category_locations.items():
+        category_paths: list[Path] = []
+        for location in locations:
+            location_path = Path(location)
+            candidate = (root / location_path).resolve()
+            is_within_root = candidate.is_relative_to(root)
+            if (
+                location_path.is_absolute()
+                or ".." in location_path.parts
+                or not is_within_root
+            ):
+                raise FetchError(
+                    f"local location {location!r} must be a "
+                    "repository-relative location"
+                )
+            try:
+                path, digest = materialized[location]
+            except KeyError:
+                try:
+                    content = candidate.read_bytes()
+                except OSError as error:
+                    raise FetchError(
+                        f"local location {location!r} cannot be read"
+                    ) from error
+                if not content.strip():
+                    raise FetchError(f"local location {location!r} is empty")
+                digest = hashlib.sha256(content).hexdigest()
+                path = objects_dir / digest
+                if not path.exists():
+                    path.write_bytes(content)
+                materialized[location] = (path, digest)
+            category_paths.append(path)
+            object_digests.append(digest)
+        paths[category] = tuple(category_paths)
     source_digest = _source_digest(tuple(object_digests))
     fetched = FetchedSource(
         name=source.name,

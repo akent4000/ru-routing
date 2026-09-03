@@ -310,6 +310,7 @@ def test_check_runs_the_fixture_build_and_validation_without_publishing(tmp_path
 
     assert exit_code == 0
     assert (dist / "manifest.json").is_file()
+    assert main(["check", "--fixtures", str(FIXTURES_DIR), "--fake-native-tools"]) == 0
 
 
 def test_release_decision_reports_initial_release_with_no_previous_manifest(
@@ -724,7 +725,7 @@ def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     assert exit_code == 0
     manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["release_version"]
-    assert manifest["category_counts"]["lite:ru"] == 1
+    assert manifest["category_counts"]["lite:ru"] == 4
     assert manifest["category_counts"]["lite:ru-geoip"] == 1
     assert manifest["category_counts"]["lite:ru-direct-geoip"] == 2
     assert manifest["category_counts"]["server:ru-geoip"] == 1
