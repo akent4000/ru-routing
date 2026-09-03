@@ -279,3 +279,11 @@ def test_readme_documents_yandex_runtime_contract() -> None:
         "bootstrap-cloudflare.sh",
     ):
         assert obsolete not in readme
+
+
+def test_readme_documents_locked_uv_development_setup() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "uv sync --locked --group dev" in readme
+    assert "uv run pytest -q" in readme
+    assert "python -m pip install -e . pytest ruff" not in readme

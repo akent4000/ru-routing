@@ -149,22 +149,20 @@ conflicting lite DIRECT category.
 Use Python 3.11 or later:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e . pytest ruff
-pytest -q
-ruff check .
-python3 -m compileall -q src
+uv sync --locked --group dev
+uv run pytest -q
+uv run ruff check .
+uv run python -m compileall -q src
 ```
 
 Fast, offline checks use committed fixtures and fake native tools:
 
 ```bash
-ru-routing check --config-only
-ru-routing check \
+uv run ru-routing check --config-only
+uv run ru-routing check \
   --fixtures tests/fixtures/upstreams/registry \
   --fake-native-tools
-ru-routing build \
+uv run ru-routing build \
   --fixtures tests/fixtures/upstreams/registry \
   --fake-native-tools \
   --dist output/dist
