@@ -146,7 +146,15 @@ conflicting lite DIRECT category.
 
 ## Local development and builds
 
-Use Python 3.11 or later:
+Use Python 3.11 or later. Install the supported uv 0.12.9 release with its
+official standalone installer before running the project commands (restart
+your shell if the installer updates `PATH`):
+
+```bash
+curl -LsSf https://astral.sh/uv/0.12.9/install.sh | sh
+```
+
+Then synchronise the locked development environment:
 
 ```bash
 uv sync --locked --group dev

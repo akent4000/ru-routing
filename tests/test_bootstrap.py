@@ -284,6 +284,9 @@ def test_readme_documents_yandex_runtime_contract() -> None:
 def test_readme_documents_locked_uv_development_setup() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
+    installer = "curl -LsSf https://astral.sh/uv/0.12.9/install.sh | sh"
+    assert installer in readme
+    assert readme.index(installer) < readme.index("uv sync --locked --group dev")
     assert "uv sync --locked --group dev" in readme
     assert "uv run pytest -q" in readme
     assert "python -m pip install -e . pytest ruff" not in readme

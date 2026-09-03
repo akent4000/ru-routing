@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import threading
+import tomllib
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +53,26 @@ def test_project_declares_dev_tools_in_a_uv_dependency_group():
     project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "[dependency-groups]" in project
     assert 'dev = ["pytest", "ruff"]' in project
+
+
+def test_project_build_backend_is_installed_from_the_lock():
+    project = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+
+    assert "setuptools>=68" in project["project"]["dependencies"]
+    assert project["tool"]["uv"]["no-build-isolation-package"] == ["ru-routing"]
+
+    packages = {package["name"]: package for package in lock["package"]}
+    assert packages["setuptools"]["source"] == {
+        "registry": "https://pypi.org/simple"
+    }
+    project_dependencies = {
+        dependency["name"]
+        for dependency in packages["ru-routing"]["dependencies"]
+    }
+    assert "setuptools" in project_dependencies
 
 
 def _load_yaml(path: Path) -> dict:
@@ -269,7 +290,9 @@ def test_ci_installs_and_uses_locked_uv_environment():
         for job in _all_jobs(document).values()
         for step in job.get("steps", [])
     ]
-    assert any(item.startswith("astral-sh/setup-uv@") for item in uses)
+    assert uses.count(
+        "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+    ) == 1
     assert 'version: "0.12.9"' in text
     assert "enable-cache: true" in text
     assert "uv sync --locked --group dev" in text
@@ -449,8 +472,14 @@ def test_builder_installs_locked_runtime_dependencies_with_pinned_uv():
     )
     assert "COPY --from=uv /uv /uvx /bin/" in dockerfile
     assert "COPY pyproject.toml uv.lock /work/" in dockerfile
-    assert "uv sync --locked --no-dev --no-install-project" in dockerfile
-    assert "uv sync --locked --no-dev" in dockerfile
+    assert re.search(
+        r"^RUN uv sync --locked --no-dev --no-install-project$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    assert re.search(
+        r"^RUN uv sync --locked --no-dev$", dockerfile, flags=re.MULTILINE
+    )
     assert 'ENTRYPOINT ["/opt/venv/bin/ru-routing"]' in dockerfile
 
 
