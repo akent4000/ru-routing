@@ -169,6 +169,8 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
     jutsu = registry.resolve("jutsu-dev/ru-route-lists")
     assert jutsu.layout == "release_assets"
     assert jutsu.freshness.max_age_hours == 48
+    hipo = registry.resolve("Hipo/university-domains-list")
+    assert hipo.freshness.max_age_hours == 8760
     assert jutsu.category_locations["blocked-domains"] == (
         "https://github.com/jutsu-dev/ru-route-lists/releases/download/"
         "latest/rkn-domains.lst",
