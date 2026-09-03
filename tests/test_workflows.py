@@ -260,6 +260,23 @@ def test_ci_writes_a_job_summary():
     assert "GITHUB_STEP_SUMMARY" in text
 
 
+def test_ci_installs_and_uses_locked_uv_environment():
+    document = _load_yaml(CI_PATH)
+    text = _raw_text(CI_PATH)
+    uses = [
+        step.get("uses", "")
+        for job in _all_jobs(document).values()
+        for step in job.get("steps", [])
+    ]
+    assert any(item.startswith("astral-sh/setup-uv@") for item in uses)
+    assert 'version: "0.12.9"' in text
+    assert "enable-cache: true" in text
+    assert "uv sync --locked --group dev" in text
+    assert "python -m pip install" not in text
+    assert "uv run pytest -q" in text
+    assert "uv run ruff check ." in text
+
+
 def test_ci_downloads_a_pinned_checksum_verified_actionlint():
     script = _step_by_id(_load_yaml(CI_PATH), "actionlint")["run"]
     assert "raw.githubusercontent.com/rhysd/actionlint/main" not in script
