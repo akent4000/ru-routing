@@ -103,6 +103,28 @@ def test_fetches_local_text_into_content_addressed_metadata_without_http(
     }
 
 
+def test_fetches_local_text_relative_to_an_explicit_repository_root(
+    tmp_path, monkeypatch
+):
+    repository_root = tmp_path / "checkout"
+    location = "config/overlays/universities-ru.txt"
+    overlay = repository_root / location
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("sso.example.edu\n", encoding="utf-8")
+    monkeypatch.setattr(fetch_module, "_REPOSITORY_ROOT", tmp_path / "site-packages")
+
+    fetched = fetch_all(
+        SourceRegistry((local_source(location),)),
+        tmp_path / "inputs",
+        client(lambda request: pytest.fail(f"unexpected request: {request.url}")),
+        repository_root=repository_root,
+    )
+
+    assert fetched.sources[0].object_paths["ru"][0].read_text(encoding="utf-8") == (
+        "sso.example.edu\n"
+    )
+
+
 @pytest.mark.parametrize("location", ["/tmp/universities-ru.txt", "../overlay.txt"])
 def test_local_text_locations_cannot_escape_the_repository_root(tmp_path, location):
     with pytest.raises(

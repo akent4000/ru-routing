@@ -486,7 +486,12 @@ def _handle_fetch(arguments: argparse.Namespace) -> int:
 
     try:
         with httpx.Client() as client:
-            fetch_all(registry, arguments.destination, client)
+            fetch_all(
+                registry,
+                arguments.destination,
+                client,
+                repository_root=arguments.config.parent,
+            )
     except Exception as error:  # noqa: BLE001 - fetch.FetchError plus transport errors
         print(f"ru-routing: fetch failed: {error}", file=sys.stderr)
         return 1

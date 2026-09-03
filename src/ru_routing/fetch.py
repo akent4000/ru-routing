@@ -119,7 +119,11 @@ class _Release:
 
 
 def fetch_all(
-    registry: SourceRegistry, destination: Path, client: httpx.Client
+    registry: SourceRegistry,
+    destination: Path,
+    client: httpx.Client,
+    *,
+    repository_root: Path | None = None,
 ) -> FetchedInputs:
     """Fetch every required source into ``destination`` as one transaction.
 
@@ -128,6 +132,7 @@ def fetch_all(
     """
 
     destination = Path(destination)
+    local_root = _REPOSITORY_ROOT if repository_root is None else Path(repository_root)
     staging = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
     )
@@ -140,7 +145,15 @@ def fetch_all(
         degraded_sources: list[DegradedSource] = []
         for source in registry.sources:
             try:
-                staged.append(_fetch_source(source, objects_dir, metadata_dir, client))
+                staged.append(
+                    _fetch_source(
+                        source,
+                        objects_dir,
+                        metadata_dir,
+                        client,
+                        repository_root=local_root,
+                    )
+                )
             except _StaleSource as error:
                 degraded = _quarantine_record(source, error.age_hours)
                 _write_quarantine_metadata(metadata_dir, degraded)
@@ -176,6 +189,8 @@ def _fetch_source(
     objects_dir: Path,
     metadata_dir: Path,
     client: httpx.Client,
+    *,
+    repository_root: Path,
 ) -> FetchedSource:
     _validate_license(source)
     if source.input_type == "builtin":
@@ -183,7 +198,7 @@ def _fetch_source(
     if source.input_type == "local_text":
         try:
             return _fetch_local_text_source(
-                source, objects_dir, metadata_dir, _REPOSITORY_ROOT
+                source, objects_dir, metadata_dir, repository_root
             )
         except FetchError as error:
             raise FetchError(
