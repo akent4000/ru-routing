@@ -37,6 +37,7 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOWS_DIR / "ci.yml"
 UPDATE_PATH = WORKFLOWS_DIR / "update.yml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
+COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 
 # Secrets that must never be referenced in ci.yml (publish-capable /
 # sensitive credentials only).
@@ -437,6 +438,27 @@ def test_builder_image_provides_pinned_verified_publish_clis():
     assert "gh_${GH_VERSION}_linux_amd64.tar.gz" in dockerfile
     assert "/usr/local/bin/aws" in dockerfile
     assert "/usr/local/bin/gh" in dockerfile
+
+
+def test_builder_installs_locked_runtime_dependencies_with_pinned_uv():
+    dockerfile = _raw_text(DOCKERFILE_PATH)
+    assert (
+        "FROM ghcr.io/astral-sh/uv:0.12.9@sha256:"
+        "8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff AS uv"
+        in dockerfile
+    )
+    assert "COPY --from=uv /uv /uvx /bin/" in dockerfile
+    assert "COPY pyproject.toml uv.lock /work/" in dockerfile
+    assert "uv sync --locked --no-dev --no-install-project" in dockerfile
+    assert "uv sync --locked --no-dev" in dockerfile
+    assert 'ENTRYPOINT ["/opt/venv/bin/ru-routing"]' in dockerfile
+
+
+def test_builder_compose_entrypoint_uses_the_installed_release_cli():
+    compose = _load_yaml(COMPOSE_PATH)
+    assert compose["services"]["builder"]["entrypoint"] == [
+        "/opt/venv/bin/ru-routing"
+    ]
 
 
 def test_update_preflights_publish_clis_inside_builder_image():
