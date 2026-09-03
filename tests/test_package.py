@@ -31,11 +31,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LICENSE_PATHS = {
     "LICENSES.md",
     "licenses/upstream/aireps-geosite/LICENSE",
+    "licenses/upstream/hipo-university-domains-list/LICENSE",
     "licenses/upstream/jutsu-dev-ru-route-lists/LICENSE",
     "licenses/upstream/loyalsoldier-v2ray-rules-dat/LICENSE",
     "licenses/upstream/runetfreedom-russia-v2ray-rules-dat/LICENSE",
     "licenses/upstream/v2fly-domain-list-community/LICENSE",
 }
+
+
+def test_license_inventory_records_hipo_mit_evidence():
+    inventory = Path("src/ru_routing/license_material/LICENSES.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Hipo/university-domains-list" in inventory
+    assert "MIT" in inventory
 
 
 def _entry(kind: RuleKind, value: str) -> RuleEntry:

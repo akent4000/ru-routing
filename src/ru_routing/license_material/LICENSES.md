@@ -13,6 +13,13 @@ work or replace the upstream license terms.
 | [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) | blocked, RU, RU-inside, ads, tracker, spy, and service domain categories | [GNU GPL v3.0](https://github.com/runetfreedom/russia-v2ray-rules-dat/blob/main/LICENSE), detected by GitHub as `GPL-3.0`. The registry records `GPL-3.0-only`; no separate `-or-later` grant was found in the repository. | runetfreedom/russia-v2ray-rules-dat contributors |
 | [jutsu-dev/ru-route-lists](https://github.com/jutsu-dev/ru-route-lists) | blocked domain and CIDR lists | [MIT license](https://github.com/jutsu-dev/ru-route-lists/blob/main/LICENSE) | jutsu-dev/ru-route-lists contributors |
 | [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat) | RU GeoIP category | [GNU GPL v3.0](https://github.com/Loyalsoldier/v2ray-rules-dat/blob/master/LICENSE), detected by GitHub as `GPL-3.0`. The registry records `GPL-3.0-only`; no separate `-or-later` grant was found in the repository. | Loyalsoldier/v2ray-rules-dat contributors |
+| [Hipo/university-domains-list](https://github.com/Hipo/university-domains-list) | filtered Russian university domains | [MIT license](https://github.com/Hipo/university-domains-list/blob/master/LICENSE) | Hipo/university-domains-list contributors |
+
+## Repository-maintained policy data
+
+| Source | Material used | Status |
+| --- | --- | --- |
+| [`local/universities-ru-overlay`](https://github.com/akent4000/ru-routing/blob/main/config/overlays/universities-ru.txt) | curated Russian university domain additions | Repository-maintained routing policy data; not third-party licensed material. |
 
 ## Sources included without a verified license (NOASSERTION)
 

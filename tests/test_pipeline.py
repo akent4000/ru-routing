@@ -21,6 +21,7 @@ import pytest
 
 from ru_routing.cli import (
     PipelineCliError,
+    _fetched_sources_from_fixtures,
     _fetched_sources_from_inputs,
     _FixtureGeodataReader,
     main,
@@ -210,6 +211,38 @@ def test_build_fixtures_produces_the_complete_output_contract(tmp_path):
     )
     assert "{{VERSION}}" not in example_text
     assert manifest["release_version"] in example_text
+
+
+def test_normalized_university_entries_retain_fixture_source_memberships():
+    registry = load_registry(CONFIG_DIR / "sources.yaml")
+    source_names = {
+        "Hipo/university-domains-list",
+        "local/universities-ru-overlay",
+    }
+    fetched_sources = _fetched_sources_from_fixtures(registry, FIXTURES_DIR).sources
+    university_sources = tuple(
+        source for source in fetched_sources if source.name in source_names
+    )
+
+    rules = normalize_sources(university_sources, registry=registry)
+
+    assert {
+        rule.value: (rule.sources, rule.memberships)
+        for rule in rules
+    } == {
+        "mirea.ru": (
+            frozenset({"Hipo/university-domains-list"}),
+            frozenset({("Hipo/university-domains-list", "ru")}),
+        ),
+        "msu.ru": (
+            frozenset({"Hipo/university-domains-list"}),
+            frozenset({("Hipo/university-domains-list", "ru")}),
+        ),
+        "spbstu.ru": (
+            frozenset({"local/universities-ru-overlay"}),
+            frozenset({("local/universities-ru-overlay", "ru")}),
+        ),
+    }
 
 
 def test_build_fixtures_is_deterministic_across_two_runs(tmp_path):
