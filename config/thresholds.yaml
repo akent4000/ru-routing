@@ -2,7 +2,7 @@ category_count_change_ratio: 0.5
 size_change_ratio: 0.5
 source_removal_migrations:
   - expected_previous_policy_fingerprint: 3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92
-    expected_current_policy_fingerprint: ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e
+    expected_current_policy_fingerprint: 1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673
     removed_source_ids:
       - hydraponique/roscomvpn-geoip
       - itdoginfo/allow-domains
@@ -34,26 +34,26 @@ source_removal_migrations:
     reset_size: true
 category_scope_migrations:
   - expected_previous_policy_fingerprint: c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7
-    expected_current_policy_fingerprint: ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e
+    expected_current_policy_fingerprint: 1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673
     reset_category_keys:
       - lite:blocked
       - lite:ads
     reset_size: true
   - expected_previous_policy_fingerprint: ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d
-    expected_current_policy_fingerprint: ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e
+    expected_current_policy_fingerprint: 1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673
     reset_category_keys:
       - lite:private
       - server:private
     reset_size: true
   - expected_previous_policy_fingerprint: 6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db
-    expected_current_policy_fingerprint: ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e
+    expected_current_policy_fingerprint: 1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673
     reset_category_keys:
       - lite:ru-whitelist
       - server:ru-whitelist
       - server:ru-direct-geoip
     reset_size: true
   - expected_previous_policy_fingerprint: 13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48
-    expected_current_policy_fingerprint: ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e
+    expected_current_policy_fingerprint: 1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673
     reset_category_keys:
       - lite:ru-geoip
       - lite:ru-direct-geoip

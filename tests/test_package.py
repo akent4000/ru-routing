@@ -454,7 +454,7 @@ def test_plan_release_allows_exact_upstream_private_policy_migration():
 
     assert decision.should_release is True
     assert decision.policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
 
 

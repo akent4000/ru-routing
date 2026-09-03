@@ -218,7 +218,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92"
     )
     assert source_removal.expected_current_policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
     category_scope_by_previous_policy = {
         migration.expected_previous_policy_fingerprint: migration
@@ -228,13 +228,13 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "c387b5303f85676c0570140b6f089694ecb481ed2ec51301d4c36bfec89783d7"
     ]
     assert category_scope.expected_current_policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
     private_scope = category_scope_by_previous_policy[
         "ff986cb880be20bcf1ebab03d31aeac21c24dda9c068ef92f685313a03866d3d"
     ]
     assert private_scope.expected_current_policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
     assert private_scope.reset_category_keys == frozenset(
         {"lite:private", "server:private"}
@@ -245,7 +245,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "6a3fc32f22d69529fb1723c73c8c61e5f5e804adb34d27badf23db38b1d7e1db"
     ]
     assert whitelist_scope.expected_current_policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
     assert whitelist_scope.reset_category_keys == frozenset(
         {"lite:ru-whitelist", "server:ru-whitelist", "server:ru-direct-geoip"}
@@ -256,7 +256,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "13beb03426ea7153649e2317c36c6247de9c8a91ee255b90149204b4e2862e48"
     ]
     assert geoip_scope.expected_current_policy_fingerprint == (
-        "ff3167726f1f11f16237dd3dd7aa4880cf6901743285780c277a67c3535de11e"
+        "1edc746eae8e16879521d0617d419937b8f8b8dc03a20bb061a6da77002e8673"
     )
     assert geoip_scope.reset_category_keys == frozenset(
         {"lite:ru-geoip", "lite:ru-direct-geoip"}

@@ -543,7 +543,7 @@ def _cidr_capable_canonical_categories() -> frozenset[str]:
                     path = root / f"{source.name.replace('/', '_')}-{category}.lst"
                     path.write_text("203.0.113.0/24\n", encoding="utf-8")
                     object_paths[category] = (path,)
-                elif source.input_type == "plain_text":
+                elif source.input_type in {"plain_text", "local_text"}:
                     path = root / f"{source.name.replace('/', '_')}-{category}.lst"
                     # Content shape (not the category name) is what the real
                     # parser (_parse_line) uses to decide domain vs CIDR, so
@@ -570,6 +570,24 @@ def _cidr_capable_canonical_categories() -> frozenset[str]:
                     )
                     path.write_text(content, encoding="utf-8")
                     object_paths[category] = (path,)
+                elif source.input_type == "university_domains_json":
+                    artifact = root / f"{source.name.replace('/', '_')}.json"
+                    digest = hashlib.sha256(
+                        f"{source.name}:{category}".encode("utf-8")
+                    ).digest()
+                    index = int.from_bytes(digest[:4], "big") % 250 + 1
+                    artifact.write_text(
+                        json.dumps(
+                            [
+                                {
+                                    "alpha_two_code": "RU",
+                                    "domains": [f"fixture{index}.test"],
+                                }
+                            ]
+                        ),
+                        encoding="utf-8",
+                    )
+                    object_paths[category] = (artifact,)
                 else:
                     artifact = root / f"{source.name.replace('/', '_')}.dat"
                     artifact.write_bytes(b"\x00")
