@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import threading
+import tomllib
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +38,7 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 CI_PATH = WORKFLOWS_DIR / "ci.yml"
 UPDATE_PATH = WORKFLOWS_DIR / "update.yml"
 DOCKERFILE_PATH = REPO_ROOT / "Dockerfile"
+COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
 
 # Secrets that must never be referenced in ci.yml (publish-capable /
 # sensitive credentials only).
@@ -45,6 +47,32 @@ _PUBLISH_SECRETS = (
     "YANDEX_S3_SECRET_ACCESS_KEY",
 )
 _PUBLISH_SECRET_ENV_NAMES = {*_PUBLISH_SECRETS, "GH_TOKEN"}
+
+
+def test_project_declares_dev_tools_in_a_uv_dependency_group():
+    project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[dependency-groups]" in project
+    assert 'dev = ["pytest", "ruff"]' in project
+
+
+def test_project_build_backend_is_installed_from_the_lock():
+    project = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+
+    assert "setuptools>=68" in project["project"]["dependencies"]
+    assert project["tool"]["uv"]["no-build-isolation-package"] == ["ru-routing"]
+
+    packages = {package["name"]: package for package in lock["package"]}
+    assert packages["setuptools"]["source"] == {
+        "registry": "https://pypi.org/simple"
+    }
+    project_dependencies = {
+        dependency["name"]
+        for dependency in packages["ru-routing"]["dependencies"]
+    }
+    assert "setuptools" in project_dependencies
 
 
 def _load_yaml(path: Path) -> dict:
@@ -254,6 +282,25 @@ def test_ci_writes_a_job_summary():
     assert "GITHUB_STEP_SUMMARY" in text
 
 
+def test_ci_installs_and_uses_locked_uv_environment():
+    document = _load_yaml(CI_PATH)
+    text = _raw_text(CI_PATH)
+    uses = [
+        step.get("uses", "")
+        for job in _all_jobs(document).values()
+        for step in job.get("steps", [])
+    ]
+    assert uses.count(
+        "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+    ) == 1
+    assert 'version: "0.12.9"' in text
+    assert "enable-cache: true" in text
+    assert "uv sync --locked --group dev" in text
+    assert "python -m pip install" not in text
+    assert "uv run pytest -q" in text
+    assert "uv run ruff check ." in text
+
+
 def test_ci_downloads_a_pinned_checksum_verified_actionlint():
     script = _step_by_id(_load_yaml(CI_PATH), "actionlint")["run"]
     assert "raw.githubusercontent.com/rhysd/actionlint/main" not in script
@@ -414,6 +461,33 @@ def test_builder_image_provides_pinned_verified_publish_clis():
     assert "gh_${GH_VERSION}_linux_amd64.tar.gz" in dockerfile
     assert "/usr/local/bin/aws" in dockerfile
     assert "/usr/local/bin/gh" in dockerfile
+
+
+def test_builder_installs_locked_runtime_dependencies_with_pinned_uv():
+    dockerfile = _raw_text(DOCKERFILE_PATH)
+    assert (
+        "FROM ghcr.io/astral-sh/uv:0.12.9@sha256:"
+        "8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff AS uv"
+        in dockerfile
+    )
+    assert "COPY --from=uv /uv /uvx /bin/" in dockerfile
+    assert "COPY pyproject.toml uv.lock /work/" in dockerfile
+    assert re.search(
+        r"^RUN uv sync --locked --no-dev --no-install-project$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    assert re.search(
+        r"^RUN uv sync --locked --no-dev$", dockerfile, flags=re.MULTILINE
+    )
+    assert 'ENTRYPOINT ["/opt/venv/bin/ru-routing"]' in dockerfile
+
+
+def test_builder_compose_entrypoint_uses_the_installed_release_cli():
+    compose = _load_yaml(COMPOSE_PATH)
+    assert compose["services"]["builder"]["entrypoint"] == [
+        "/opt/venv/bin/ru-routing"
+    ]
 
 
 def test_update_preflights_publish_clis_inside_builder_image():

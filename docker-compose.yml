@@ -22,4 +22,4 @@ services:
       - ./output:/work/output
     # Example: docker compose run --rm builder build --fixtures
     # tests/fixtures/upstreams/registry --dist /work/output/dist
-    entrypoint: ["ru-routing"]
+    entrypoint: ["/opt/venv/bin/ru-routing"]

@@ -116,6 +116,9 @@ RUN set -eu; \
     unzip -q awscliv2.zip; \
     rm awscliv2.zip
 
+# --- Locked Python dependency manager ----------------------------------
+FROM ghcr.io/astral-sh/uv:0.12.9@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff AS uv
+
 # --- Final image -------------------------------------------------------
 FROM base AS final
 
@@ -146,12 +149,17 @@ RUN chmod +x /usr/local/bin/dlc /usr/local/bin/geoip \
     && ln -s /opt/aws-cli/dist/aws /usr/local/bin/aws
 
 WORKDIR /work
-COPY pyproject.toml /work/pyproject.toml
+COPY --from=uv /uv /uvx /bin/
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+
+COPY pyproject.toml uv.lock /work/
+RUN uv sync --locked --no-dev --no-install-project
+
 COPY src /work/src
 COPY examples /work/examples
 COPY config /work/config
 COPY tests /work/tests
-RUN pip install --no-cache-dir /work
+RUN uv sync --locked --no-dev
 
 # Xray resolves relative-looking `ext:` domain/geoip file references (used
 # by validate.py's generated test config) against XRAY_LOCATION_ASSET,
@@ -185,5 +193,5 @@ RUN groupadd --gid 10001 appgroup \
 
 USER appuser
 
-ENTRYPOINT ["ru-routing"]
+ENTRYPOINT ["/opt/venv/bin/ru-routing"]
 CMD ["--help"]
