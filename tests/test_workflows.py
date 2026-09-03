@@ -47,6 +47,12 @@ _PUBLISH_SECRETS = (
 _PUBLISH_SECRET_ENV_NAMES = {*_PUBLISH_SECRETS, "GH_TOKEN"}
 
 
+def test_project_declares_dev_tools_in_a_uv_dependency_group():
+    project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[dependency-groups]" in project
+    assert 'dev = ["pytest", "ruff"]' in project
+
+
 def _load_yaml(path: Path) -> dict:
     assert path.is_file(), f"expected workflow file at {path}"
     with path.open("r", encoding="utf-8") as handle:
