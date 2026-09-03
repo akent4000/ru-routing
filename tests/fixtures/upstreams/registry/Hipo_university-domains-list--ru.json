@@ -1,0 +1,12 @@
+[
+  {
+    "name": "MIREA — Russian Technological University",
+    "alpha_two_code": "RU",
+    "domains": ["mirea.ru", "msu.ru"]
+  },
+  {
+    "name": "Example University",
+    "alpha_two_code": "US",
+    "domains": ["example.edu"]
+  }
+]

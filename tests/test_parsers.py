@@ -60,13 +60,14 @@ def _geoip(category: str, *cidrs: bytes) -> bytes:
 
 def source(
     *,
+    name="fixture/source",
     input_type="plain_text",
     layout="per_category_urls",
     categories=("rules",),
     bare_domain_kind=RuleKind.DOMAIN,
 ):
     return SourceDefinition(
-        name="fixture/source",
+        name=name,
         url="https://example.test/rules",
         input_type=input_type,
         layout=layout,
@@ -133,6 +134,104 @@ def test_parse_source_uses_source_bare_domain_kind_for_plain_hostnames(tmp_path)
     assert [(rule.kind, rule.value) for rule in rules] == [
         (RuleKind.DOMAIN_SUFFIX, "ozon.ru")
     ]
+
+
+def test_parse_source_extracts_russian_university_domain_suffixes():
+    artifact = (
+        FIXTURES
+        / "registry"
+        / "Hipo_university-domains-list--ru.json"
+    )
+    hipo_source = source(
+        name="Hipo/university-domains-list",
+        input_type="university_domains_json",
+        layout="single_artifact",
+        categories=("ru",),
+    )
+
+    rules = tuple(parse_source(hipo_source, {"ru": (artifact,)}))
+
+    assert [(rule.kind, rule.value) for rule in rules] == [
+        (RuleKind.DOMAIN_SUFFIX, "mirea.ru"),
+        (RuleKind.DOMAIN_SUFFIX, "msu.ru"),
+    ]
+    assert {rule.source for rule in rules} == {"Hipo/university-domains-list"}
+    assert all(rule.category == "ru" and rule.line is None for rule in rules)
+
+
+@pytest.mark.parametrize(
+    ("contents", "match"),
+    [
+        (b'{"alpha_two_code":"RU"}', "top-level JSON value must be a list"),
+        (b'["not a record"]', "record must be a mapping"),
+        (
+            b'[{"alpha_two_code":"RU","domains":"mirea.ru"}]',
+            "domains must be a list",
+        ),
+        (
+            b'[{"alpha_two_code":"RU","domains":[""]}]',
+            "domain must be a non-empty string",
+        ),
+        (
+            b'[{"alpha_two_code":"RU","domains":[42]}]',
+            "domain must be a non-empty string",
+        ),
+        (b"\xff", "input is not UTF-8"),
+        (b"not JSON", "invalid JSON"),
+    ],
+)
+def test_parse_source_rejects_malformed_university_json_with_source_and_path(
+    tmp_path, contents, match
+):
+    artifact = tmp_path / "universities.json"
+    artifact.write_bytes(contents)
+    hipo_source = source(
+        input_type="university_domains_json",
+        layout="single_artifact",
+        categories=("ru",),
+    )
+
+    with pytest.raises(
+        ParseError, match=rf"fixture/source.*universities.json.*{match}"
+    ):
+        tuple(parse_source(hipo_source, {"ru": (artifact,)}))
+
+
+def test_parse_source_uses_domain_suffixes_for_the_local_university_overlay():
+    overlay = (
+        FIXTURES
+        / "registry"
+        / "local_universities-ru-overlay--ru.lst"
+    )
+    overlay_source = source(
+        input_type="local_text",
+        layout="repository_file",
+        categories=("ru",),
+    )
+
+    rules = tuple(parse_source(overlay_source, {"ru": (overlay,)}))
+
+    assert [(rule.kind, rule.value) for rule in rules] == [
+        (RuleKind.DOMAIN_SUFFIX, "spbstu.ru"),
+    ]
+    assert {(rule.source, rule.category) for rule in rules} == {
+        ("fixture/source", "ru"),
+    }
+
+
+def test_parse_source_rejects_non_repository_file_local_text_layout(tmp_path):
+    artifact = tmp_path / "universities.txt"
+    artifact.write_text("spbstu.ru\n", encoding="utf-8")
+    overlay_source = source(
+        input_type="local_text",
+        layout="per_category_urls",
+        categories=("ru",),
+    )
+
+    with pytest.raises(
+        ParseError, match="fixture/source.*invalid local-text source layout"
+    ):
+        tuple(parse_source(overlay_source, {"ru": (artifact,)}))
 
 
 def test_parse_source_rejects_unknown_domain_list_rule_with_source_and_line(tmp_path):

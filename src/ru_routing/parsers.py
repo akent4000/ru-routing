@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
@@ -282,6 +283,18 @@ def parse_source(
             raise ParseError(f"{source.name}: invalid plain-text source layout")
         yield from _parse_plain_text(source, paths)
         return
+    if source.input_type == "local_text":
+        if source.layout != "repository_file":
+            raise ParseError(f"{source.name}: invalid local-text source layout")
+        yield from _parse_plain_text(
+            replace(source, bare_domain_kind=RuleKind.DOMAIN_SUFFIX), paths
+        )
+        return
+    if source.input_type == "university_domains_json":
+        if source.layout != "single_artifact":
+            raise ParseError(f"{source.name}: invalid university JSON source layout")
+        yield from _parse_university_domains_json(source, paths)
+        return
     if source.input_type in {"geoip_dat", "geosite_dat"}:
         if source.layout != "single_artifact":
             raise ParseError(f"{source.name}: invalid binary source layout")
@@ -332,6 +345,58 @@ def _geodata_raw_rule(
         line=None,
         attributes=frozenset(rule.attributes),
     )
+
+
+def _parse_university_domains_json(
+    source: SourceDefinition, paths: Mapping[str, tuple[Path, ...]]
+) -> Iterable[RawRule]:
+    for category in source.expected_categories:
+        for artifact in paths[category]:
+            document = _read_university_domains_document(source.name, artifact)
+            for record_number, record in enumerate(document, start=1):
+                if not isinstance(record, Mapping):
+                    raise ParseError(
+                        f"{source.name}: {artifact}: record {record_number}: "
+                        "record must be a mapping"
+                    )
+                if record.get("alpha_two_code") != "RU":
+                    continue
+                domains = record.get("domains")
+                if not isinstance(domains, list):
+                    raise ParseError(
+                        f"{source.name}: {artifact}: record {record_number}: "
+                        "domains must be a list"
+                    )
+                for domain in domains:
+                    if not isinstance(domain, str) or not domain:
+                        raise ParseError(
+                            f"{source.name}: {artifact}: record {record_number}: "
+                            "domain must be a non-empty string"
+                        )
+                    yield RawRule(
+                        source=source.name,
+                        category=category,
+                        kind=RuleKind.DOMAIN_SUFFIX,
+                        value=domain,
+                        path=artifact,
+                        line=None,
+                    )
+
+
+def _read_university_domains_document(source: str, artifact: Path) -> list[object]:
+    try:
+        content = artifact.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ParseError(f"{source}: {artifact}: input is not UTF-8") from error
+    except OSError as error:
+        raise ParseError(f"{source}: {artifact}: cannot read input") from error
+    try:
+        document = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise ParseError(f"{source}: {artifact}: invalid JSON") from error
+    if not isinstance(document, list):
+        raise ParseError(f"{source}: {artifact}: top-level JSON value must be a list")
+    return document
 
 
 def _parse_plain_text(
