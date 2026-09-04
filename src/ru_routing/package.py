@@ -24,6 +24,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 import tarfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -291,6 +292,7 @@ def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
         current_policy=current_policy,
         migrations=metadata.thresholds.category_scope_migrations,
     )
+    _check_quarantine_minimum_remaining(metadata, previous)
     reset_category_keys = frozenset(
         (source_removal.reset_category_keys if source_removal else frozenset())
         | (
@@ -328,6 +330,33 @@ def plan_release(metadata: BuildMetadata) -> ReleaseDecision:
         content_fingerprint=current_content,
         policy_fingerprint=current_policy,
     )
+
+
+def _check_quarantine_minimum_remaining(
+    metadata: BuildMetadata,
+    previous: Mapping[str, object],
+) -> None:
+    previous_counts = previous.get("category_counts")
+    if not isinstance(previous_counts, dict):
+        return
+    ratio = metadata.thresholds.quarantine_minimum_remaining_ratio
+    current_counts = _category_counts(metadata.build)
+    for key in sorted(metadata.quarantined_category_keys):
+        previous_count = previous_counts.get(key)
+        if (
+            isinstance(previous_count, bool)
+            or not isinstance(previous_count, (int, float))
+            or previous_count <= 0
+        ):
+            continue
+        minimum = math.ceil(previous_count * ratio)
+        current_count = current_counts.get(key, 0)
+        if current_count < minimum:
+            raise AnomalyError(
+                f"quarantined category {key} has {current_count} entries; "
+                f"previous {previous_count}, configured minimum remaining "
+                f"{ratio:.2%}, minimum {minimum}"
+            )
 
 
 def _version_string(content_digest: str, built_at: str) -> str:

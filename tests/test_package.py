@@ -401,22 +401,42 @@ def test_plan_release_fails_on_category_count_anomaly():
         plan_release(metadata)
 
 
-def test_quarantine_allows_only_its_affected_category_count_change():
+def _quarantined_metadata(previous_count: object | None) -> BuildMetadata:
     build = _build()
+    previous_counts = (
+        {} if previous_count is None else {"server:blocked": previous_count}
+    )
     previous = {
         "content_fingerprint": "a" * 64,
         "policy_fingerprint": "b" * 64,
-        "category_counts": {"server:blocked": 100},
+        "category_counts": previous_counts,
         "total_size_bytes": package_module._content_size_bytes(build),
     }
-    metadata = _metadata(build=build, previous_manifest=previous)
-    metadata = replace(
-        metadata,
+    return replace(
+        _metadata(build=build, previous_manifest=previous),
         quarantined_category_keys=frozenset({"server:blocked"}),
     )
 
-    assert plan_release(metadata).should_release is True
 
+def test_quarantine_rejects_category_below_minimum_remaining_ratio():
+    with pytest.raises(
+        AnomalyError,
+        match=r"category server:blocked.*3.*previous 7.*50.00%.*minimum 4",
+    ):
+        plan_release(_quarantined_metadata(7))
+
+
+def test_quarantine_accepts_category_at_minimum_remaining_ratio():
+    assert plan_release(_quarantined_metadata(6)).should_release is True
+
+
+@pytest.mark.parametrize("previous_count", [None, 0])
+def test_quarantine_skips_category_without_positive_baseline(previous_count):
+    assert plan_release(_quarantined_metadata(previous_count)).should_release is True
+
+
+def test_quarantine_does_not_bypass_ordinary_anomaly_detection():
+    metadata = _quarantined_metadata(7)
     with pytest.raises(AnomalyError, match="category server:blocked"):
         plan_release(replace(metadata, quarantined_category_keys=frozenset()))
 
