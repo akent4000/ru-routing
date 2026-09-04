@@ -308,6 +308,26 @@ def test_thresholds_accept_quarantine_remaining_ratio_boundaries(value, tmp_path
     assert load_thresholds(path).quarantine_minimum_remaining_ratio == float(value)
 
 
+def test_thresholds_reject_overflowing_quarantine_remaining_ratio(tmp_path):
+    path = tmp_path / "thresholds.yaml"
+    contents = Path("config/thresholds.yaml").read_text(encoding="utf-8")
+    path.write_text(
+        contents.replace(
+            "quarantine_minimum_remaining_ratio: 0.5",
+            f"quarantine_minimum_remaining_ratio: {10**400}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "quarantine_minimum_remaining_ratio must be a number between zero and one"
+        ),
+    ):
+        load_thresholds(path)
+
+
 def test_jutsu_has_normal_freshness_without_temporary_exception():
     registry = load_registry(Path("config/sources.yaml"))
 

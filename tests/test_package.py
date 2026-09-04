@@ -401,11 +401,16 @@ def test_plan_release_fails_on_category_count_anomaly():
         plan_release(metadata)
 
 
-def _quarantined_metadata(previous_count: object | None) -> BuildMetadata:
+def _quarantined_metadata(
+    previous_count: object | None,
+    *,
+    additional_previous_counts: dict[str, object] | None = None,
+) -> BuildMetadata:
     build = _build()
     previous_counts = (
         {} if previous_count is None else {"server:blocked": previous_count}
     )
+    previous_counts.update(additional_previous_counts or {})
     previous = {
         "content_fingerprint": "a" * 64,
         "policy_fingerprint": "b" * 64,
@@ -430,6 +435,21 @@ def test_quarantine_accepts_category_at_minimum_remaining_ratio():
     assert plan_release(_quarantined_metadata(6)).should_release is True
 
 
+def test_quarantine_uses_exact_minimum_above_float_integer_precision():
+    previous_count = 2**53 + 1
+
+    with pytest.raises(
+        AnomalyError,
+        match=rf"previous {previous_count}.*minimum {2**52 + 1}",
+    ):
+        plan_release(_quarantined_metadata(previous_count))
+
+
+def test_quarantine_handles_huge_positive_integer_baseline():
+    with pytest.raises(AnomalyError, match="quarantined category server:blocked"):
+        plan_release(_quarantined_metadata(10**400))
+
+
 @pytest.mark.parametrize("previous_count", [None, 0])
 def test_quarantine_skips_category_without_positive_baseline(previous_count):
     assert plan_release(_quarantined_metadata(previous_count)).should_release is True
@@ -444,6 +464,16 @@ def test_quarantine_does_not_bypass_ordinary_anomaly_detection():
     metadata = _quarantined_metadata(7)
     with pytest.raises(AnomalyError, match="category server:blocked"):
         plan_release(replace(metadata, quarantined_category_keys=frozenset()))
+
+
+def test_quarantine_still_checks_unrelated_category_anomaly():
+    metadata = _quarantined_metadata(
+        6,
+        additional_previous_counts={"lite:ru-ip": 3},
+    )
+
+    with pytest.raises(AnomalyError, match="category lite:ru-ip"):
+        plan_release(metadata)
 
 
 def test_plan_release_allows_exact_approved_source_removal_baseline_reset():

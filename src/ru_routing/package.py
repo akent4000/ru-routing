@@ -350,7 +350,18 @@ def _check_quarantine_minimum_remaining(
             or (isinstance(previous_count, float) and not math.isfinite(previous_count))
         ):
             continue
-        minimum = math.ceil(previous_count * ratio)
+        ratio_numerator, ratio_denominator = ratio.as_integer_ratio()
+        if isinstance(previous_count, float):
+            previous_numerator, previous_denominator = (
+                previous_count.as_integer_ratio()
+            )
+        else:
+            previous_numerator, previous_denominator = previous_count, 1
+        minimum_numerator = previous_numerator * ratio_numerator
+        minimum_denominator = previous_denominator * ratio_denominator
+        minimum = (
+            minimum_numerator + minimum_denominator - 1
+        ) // minimum_denominator
         current_count = current_counts.get(key, 0)
         if current_count < minimum:
             raise AnomalyError(

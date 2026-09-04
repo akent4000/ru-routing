@@ -316,10 +316,9 @@ def _ratio(value: Any, context: str) -> float:
 def _non_negative_ratio(value: Any, context: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{context} must be a number between zero and one")
-    result = float(value)
-    if not 0 <= result <= 1:
+    if not 0 <= value <= 1:
         raise ConfigError(f"{context} must be a number between zero and one")
-    return result
+    return float(value)
 
 
 def _source_category_key(source: str, source_category: str) -> str:
