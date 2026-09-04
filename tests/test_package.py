@@ -435,6 +435,11 @@ def test_quarantine_skips_category_without_positive_baseline(previous_count):
     assert plan_release(_quarantined_metadata(previous_count)).should_release is True
 
 
+@pytest.mark.parametrize("previous_count", [float("nan"), float("inf"), float("-inf")])
+def test_quarantine_skips_non_finite_baseline(previous_count):
+    assert plan_release(_quarantined_metadata(previous_count)).should_release is True
+
+
 def test_quarantine_does_not_bypass_ordinary_anomaly_detection():
     metadata = _quarantined_metadata(7)
     with pytest.raises(AnomalyError, match="category server:blocked"):

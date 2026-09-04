@@ -347,6 +347,7 @@ def _check_quarantine_minimum_remaining(
             isinstance(previous_count, bool)
             or not isinstance(previous_count, (int, float))
             or previous_count <= 0
+            or (isinstance(previous_count, float) and not math.isfinite(previous_count))
         ):
             continue
         minimum = math.ceil(previous_count * ratio)
