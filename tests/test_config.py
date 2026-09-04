@@ -176,6 +176,7 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         "latest/rkn-domains.lst",
     )
     assert thresholds.category_count_change_ratio == 0.5
+    assert thresholds.quarantine_minimum_remaining_ratio == 0.5
     (source_removal,) = thresholds.source_removal_migrations
     # Historical migration record: fixes the exact set of sources removed
     # at that past transition. itdoginfo/allow-domains was later
@@ -269,6 +270,42 @@ def test_loaded_policies_are_immutable_and_preserve_freshness_and_tiers():
         aireps.url = "https://invalid.example"  # type: ignore[misc]
     with pytest.raises(TypeError):
         policy.source_categories["other"] = object()  # type: ignore[index]
+
+
+@pytest.mark.parametrize("value", ["-0.1", "1.1", "true", ".nan", ".inf"])
+def test_thresholds_reject_invalid_quarantine_remaining_ratio(value, tmp_path):
+    path = tmp_path / "thresholds.yaml"
+    contents = Path("config/thresholds.yaml").read_text(encoding="utf-8")
+    path.write_text(
+        contents.replace(
+            "quarantine_minimum_remaining_ratio: 0.5",
+            f"quarantine_minimum_remaining_ratio: {value}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "quarantine_minimum_remaining_ratio must be a number between zero and one"
+        ),
+    ):
+        load_thresholds(path)
+
+
+@pytest.mark.parametrize("value", ["0", "1"])
+def test_thresholds_accept_quarantine_remaining_ratio_boundaries(value, tmp_path):
+    path = tmp_path / "thresholds.yaml"
+    contents = Path("config/thresholds.yaml").read_text(encoding="utf-8")
+    path.write_text(
+        contents.replace(
+            "quarantine_minimum_remaining_ratio: 0.5",
+            f"quarantine_minimum_remaining_ratio: {value}",
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_thresholds(path).quarantine_minimum_remaining_ratio == float(value)
 
 
 def test_jutsu_has_normal_freshness_without_temporary_exception():

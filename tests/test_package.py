@@ -141,7 +141,9 @@ def _write_dist(dist: Path) -> None:
 
 
 _DEFAULT_THRESHOLDS = ThresholdPolicy(
-    category_count_change_ratio=0.5, size_change_ratio=0.5
+    category_count_change_ratio=0.5,
+    size_change_ratio=0.5,
+    quarantine_minimum_remaining_ratio=0.5,
 )
 
 DEGRADED_JUTSU = DegradedSource(

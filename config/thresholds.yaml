@@ -1,5 +1,6 @@
 category_count_change_ratio: 0.5
 size_change_ratio: 0.5
+quarantine_minimum_remaining_ratio: 0.5
 source_removal_migrations:
   - expected_previous_policy_fingerprint: 3622e0da67ebb699da90527f95f006e973632f67c6a39efb051dab1ea7b79b92
     expected_current_policy_fingerprint: 4000626f731580123f685a0ca05cf2d70567797ad32a5ec9bd0071074cd35629

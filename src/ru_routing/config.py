@@ -255,6 +255,7 @@ class ThresholdPolicy:
 
     category_count_change_ratio: float
     size_change_ratio: float
+    quarantine_minimum_remaining_ratio: float
     source_removal_migrations: tuple[SourceRemovalMigration, ...] = ()
     category_scope_migrations: tuple[CategoryScopeMigration, ...] = ()
 
@@ -308,6 +309,15 @@ def _ratio(value: Any, context: str) -> float:
         raise ConfigError(f"{context} must be a number between zero and one")
     result = float(value)
     if not 0 < result <= 1:
+        raise ConfigError(f"{context} must be a number between zero and one")
+    return result
+
+
+def _non_negative_ratio(value: Any, context: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{context} must be a number between zero and one")
+    result = float(value)
+    if not 0 <= result <= 1:
         raise ConfigError(f"{context} must be a number between zero and one")
     return result
 
@@ -745,6 +755,7 @@ def load_thresholds(path: Path) -> ThresholdPolicy:
         {
             "category_count_change_ratio",
             "size_change_ratio",
+            "quarantine_minimum_remaining_ratio",
             "source_removal_migrations",
             "category_scope_migrations",
         },
@@ -755,6 +766,10 @@ def load_thresholds(path: Path) -> ThresholdPolicy:
             document["category_count_change_ratio"], "category_count_change_ratio"
         ),
         size_change_ratio=_ratio(document["size_change_ratio"], "size_change_ratio"),
+        quarantine_minimum_remaining_ratio=_non_negative_ratio(
+            document["quarantine_minimum_remaining_ratio"],
+            "quarantine_minimum_remaining_ratio",
+        ),
         source_removal_migrations=_source_removal_migrations(
             document["source_removal_migrations"]
         ),
