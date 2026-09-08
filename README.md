@@ -1,15 +1,19 @@
 # RU routing datasets
 
-This repository builds deterministic Russian split-routing datasets for Xray,
-sing-box, and Mihomo. It combines reviewed upstream domain and CIDR lists,
-normalizes conflicts, validates native artifacts, and publishes auditable
+Auditable, conflict-safe, and reproducible Russian split-routing releases for
+Xray, sing-box, and Mihomo.
+
+This repository combines reviewed upstream domain and CIDR lists, resolves
+policy conflicts, validates native artifacts, and publishes reproducible
 `lite` and `server` releases.
 
 ## Choose a dataset
 
 - `lite` is the compact client policy. It sends trusted RU and Russia-only
-  destinations directly, sends explicitly blocked RU destinations through the
-  deployment's proxy, blocks `spy`, and sends unmatched traffic through the
+  destinations directly, blocks `spy`, and sends unmatched traffic through the
+  deployment's proxy. The `blocked` sources are not published as lite
+  artifacts: they remove matching destinations from lite DIRECT categories
+  during conflict resolution, so those destinations also use the default
   proxy. `ads` and `trackers` are included but opt-in.
 - `server` is a self-contained superset for an egress node. It includes the
   configured service categories and reviewed RU GeoIP category, blocks
@@ -113,7 +117,7 @@ the policy source of truth.
 | --- | --- | --- | --- |
 | `ru` | lite, server | domains | DIRECT |
 | `ru-global` | server | domains | trusted RU direct candidate; not in the default example |
-| `blocked` | lite, server | domains and CIDRs | PROXY, before any RU DIRECT match |
+| `blocked` | server | domains and CIDRs | PROXY; also filters lite DIRECT categories, whose removed entries use lite's default proxy |
 | `private` | lite, server | domains and CIDRs | DIRECT |
 | `ru-inside` | lite, server | domains | DIRECT |
 | `ru-geoip` | lite, server | CIDRs | DIRECT |
@@ -142,7 +146,10 @@ NOASSERTION direct-CIDR candidate layer; `ru-services` is not published. See
 
 Policy precedence is deny (`spy`), explicit `blocked`, trusted RU direct, then
 thematic categories. A blocked entry is never allowed to remain in a
-conflicting lite DIRECT category.
+conflicting lite DIRECT category. Lite does not publish `blocked` rule-set
+artifacts (`blocked.srs`, `blocked-domain.mrs`, or a separate Xray category):
+after conflict resolution, the default proxy route provides the intended
+behavior without duplicating the server-only category in lite.
 
 ## Local development and builds
 
