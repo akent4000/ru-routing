@@ -1,0 +1,2 @@
+domain:fixture-a.ru-marking.example
+domain:fixture-b.ru-marking.example

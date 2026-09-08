@@ -1,0 +1,2 @@
+domain:fixture-a.ru-payments.example
+domain:fixture-b.ru-payments.example

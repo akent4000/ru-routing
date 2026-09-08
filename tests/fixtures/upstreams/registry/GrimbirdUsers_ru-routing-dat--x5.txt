@@ -1,0 +1,2 @@
+domain:fixture-a.x5.example
+domain:fixture-b.x5.example

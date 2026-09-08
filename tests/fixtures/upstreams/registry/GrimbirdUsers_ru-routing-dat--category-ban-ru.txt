@@ -1,0 +1,2 @@
+domain:fixture-a.category-ban-ru.example
+domain:fixture-b.category-ban-ru.example

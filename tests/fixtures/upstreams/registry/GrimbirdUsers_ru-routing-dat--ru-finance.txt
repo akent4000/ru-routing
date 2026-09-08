@@ -1,0 +1,2 @@
+domain:fixture-a.ru-finance.example
+domain:fixture-b.ru-finance.example

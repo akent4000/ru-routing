@@ -1,0 +1,2 @@
+domain:fixture-a.wink.example
+domain:fixture-b.wink.example

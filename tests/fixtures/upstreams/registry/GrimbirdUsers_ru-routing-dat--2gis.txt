@@ -1,0 +1,2 @@
+domain:fixture-a.2gis.example
+domain:fixture-b.2gis.example

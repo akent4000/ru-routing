@@ -1,0 +1,2 @@
+domain:fixture-a.vk.example
+domain:fixture-b.vk.example

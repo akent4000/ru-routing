@@ -1,0 +1,2 @@
+domain:fixture-a.yandex.example
+domain:fixture-b.yandex.example

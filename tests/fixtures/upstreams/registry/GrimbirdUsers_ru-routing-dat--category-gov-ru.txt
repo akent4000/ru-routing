@@ -1,0 +1,2 @@
+domain:fixture-a.category-gov-ru.example
+domain:fixture-b.category-gov-ru.example

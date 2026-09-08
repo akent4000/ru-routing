@@ -1,0 +1,2 @@
+domain:fixture-a.mailru-group.example
+domain:fixture-b.mailru-group.example

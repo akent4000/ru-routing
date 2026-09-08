@@ -1,0 +1,2 @@
+domain:fixture-a.ru-transport.example
+domain:fixture-b.ru-transport.example

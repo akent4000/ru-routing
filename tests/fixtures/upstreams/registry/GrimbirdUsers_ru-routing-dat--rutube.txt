@@ -1,0 +1,2 @@
+domain:fixture-a.rutube.example
+domain:fixture-b.rutube.example

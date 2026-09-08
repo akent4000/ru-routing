@@ -1,0 +1,2 @@
+domain:fixture-a.wildberries.example
+domain:fixture-b.wildberries.example

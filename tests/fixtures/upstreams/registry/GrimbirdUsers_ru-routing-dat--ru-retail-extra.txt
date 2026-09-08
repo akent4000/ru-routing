@@ -1,0 +1,2 @@
+domain:fixture-a.ru-retail-extra.example
+domain:fixture-b.ru-retail-extra.example

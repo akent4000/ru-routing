@@ -1,0 +1,2 @@
+domain:fixture-a.ru-whitelist-extended.example
+domain:fixture-b.ru-whitelist-extended.example

@@ -1,0 +1,2 @@
+domain:fixture-a.ru-analytics.example
+domain:fixture-b.ru-analytics.example

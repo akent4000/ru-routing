@@ -1,0 +1,2 @@
+domain:fixture-a.ru-tv.example
+domain:fixture-b.ru-tv.example

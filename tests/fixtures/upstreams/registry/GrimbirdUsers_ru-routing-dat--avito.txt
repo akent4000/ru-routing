@@ -1,0 +1,2 @@
+domain:fixture-a.avito.example
+domain:fixture-b.avito.example

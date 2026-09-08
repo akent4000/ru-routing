@@ -1,0 +1,2 @@
+domain:fixture-a.ru-medical.example
+domain:fixture-b.ru-medical.example

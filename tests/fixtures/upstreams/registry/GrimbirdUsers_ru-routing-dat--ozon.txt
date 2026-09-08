@@ -1,0 +1,2 @@
+domain:fixture-a.ozon.example
+domain:fixture-b.ozon.example

@@ -1,0 +1,2 @@
+domain:fixture-a.ru-banks.example
+domain:fixture-b.ru-banks.example
