@@ -758,10 +758,10 @@ def test_build_inputs_decodes_live_shaped_geodata_from_fetch_output(tmp_path):
     assert exit_code == 0
     manifest = json.loads((dist / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["release_version"]
-    assert manifest["category_counts"]["lite:ru"] == 4
-    assert manifest["category_counts"]["lite:ru-geoip"] == 1
+    assert manifest["category_counts"]["lite:ru"] == 52
+    assert manifest["category_counts"]["lite:ru-geoip"] == 19
     assert manifest["category_counts"]["lite:ru-direct-geoip"] == 2
-    assert manifest["category_counts"]["server:ru-geoip"] == 1
+    assert manifest["category_counts"]["server:ru-geoip"] == 19
 
 
 def test_inputs_loader_accepts_quarantine_metadata_and_omits_objects(tmp_path):
