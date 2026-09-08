@@ -21,6 +21,7 @@ INITIAL_SOURCE_IDS = frozenset(
         "itdoginfo/allow-domains",
         "hydraponique/roscomvpn-geoip",
         "kirilllavrov/RU-domain-list-for-whitelist",
+        "GrimbirdUsers/ru-routing-dat",
         "builtin/private-networks",
         "Hipo/university-domains-list",
         "local/universities-ru-overlay",
