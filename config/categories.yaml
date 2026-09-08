@@ -25,3 +25,39 @@ mappings:
   - {source: builtin/private-networks, source_category: private, canonical_category: private, datasets: [lite, server], tier: trusted_direct}
   - {source: Hipo/university-domains-list, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
   - {source: local/universities-ru-overlay, source_category: ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: category-ru, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: yandex, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: vk, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: mailru-group, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ozon, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: wildberries, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: x5, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: avito, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: dzen, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: rutube, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ok, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: okko, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: wink, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: 2gis, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-analytics, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-banks, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-cdn, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-finance, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-marking, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-medical, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-payments, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-retail-extra, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-transport, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-tv, canonical_category: ru, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-whitelist-extended, canonical_category: ru-whitelist, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: category-gov-ru, canonical_category: ru-whitelist, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: category-ban-ru, canonical_category: blocked, datasets: [server], tier: explicit_blocked}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-yandex, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-vk, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-ozon, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-wildberries, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-mts, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-analytics-cidr, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-banks-cidr, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-cdn-cidr, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}
+  - {source: GrimbirdUsers/ru-routing-dat, source_category: ru-payments-cidr, canonical_category: ru-geoip, datasets: [lite, server], tier: trusted_direct}

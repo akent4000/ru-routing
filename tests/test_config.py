@@ -9,6 +9,7 @@ from ru_routing.models import RuleKind
 
 EXPECTED_SOURCES = {
     "aireps/geosite",
+    "GrimbirdUsers/ru-routing-dat",
     "runetfreedom/russia-v2ray-rules-dat",
     "jutsu-dev/ru-route-lists",
     "Loyalsoldier/v2ray-rules-dat",
