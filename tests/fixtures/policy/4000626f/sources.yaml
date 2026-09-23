@@ -57,21 +57,6 @@ sources:
       redistribution_reviewed: true
     freshness:
       max_age_hours: 48
-  - name: fatyzzz/max-list
-    url: https://api.github.com/repos/fatyzzz/max-list/releases/latest
-    input_type: plain_text
-    layout: release_assets
-    required: true
-    expected_categories: [ip-check-formatted, vpndetect]
-    category_locations:
-      ip-check-formatted: https://github.com/fatyzzz/max-list/releases/latest/download/ip-check-formatted.txt
-      vpndetect: https://github.com/fatyzzz/max-list/releases/latest/download/vpndetect.txt
-    attribution: fatyzzz/max-list contributors
-    license:
-      spdx: NOASSERTION
-      redistribution_reviewed: true
-    freshness:
-      max_age_hours: 48
   - name: Loyalsoldier/v2ray-rules-dat
     url: https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
     input_type: geoip_dat
@@ -130,56 +115,6 @@ sources:
       redistribution_reviewed: true
     freshness:
       max_age_hours: 8760
-  - name: GrimbirdUsers/ru-routing-dat
-    url: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/category-ru
-    input_type: plain_text
-    bare_domain_kind: domain_suffix
-    layout: per_category_urls
-    required: true
-    expected_categories: [category-ru, category-gov-ru, ru-whitelist-extended, category-ban-ru, yandex, vk, mailru-group, ozon, wildberries, x5, avito, dzen, rutube, ok, okko, wink, 2gis, ru-analytics, ru-banks, ru-cdn, ru-finance, ru-marking, ru-medical, ru-payments, ru-retail-extra, ru-transport, ru-tv, ru-yandex, ru-vk, ru-ozon, ru-wildberries, ru-mts, ru-analytics-cidr, ru-banks-cidr, ru-cdn-cidr, ru-payments-cidr]
-    category_locations:
-      category-ru: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/category-ru
-      category-gov-ru: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/category-gov-ru
-      ru-whitelist-extended: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-whitelist-extended
-      category-ban-ru: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/category-ban-ru
-      yandex: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/yandex
-      vk: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/vk
-      mailru-group: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/mailru-group
-      ozon: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ozon
-      wildberries: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/wildberries
-      x5: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/x5
-      avito: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/avito
-      dzen: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/dzen
-      rutube: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/rutube
-      ok: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ok
-      okko: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/okko
-      wink: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/wink
-      2gis: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/2gis
-      ru-analytics: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-analytics
-      ru-banks: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-banks
-      ru-cdn: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-cdn
-      ru-finance: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-finance
-      ru-marking: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-marking
-      ru-medical: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-medical
-      ru-payments: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-payments
-      ru-retail-extra: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-retail-extra
-      ru-transport: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-transport
-      ru-tv: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geosite/ru-tv
-      ru-yandex: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-yandex.txt
-      ru-vk: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-vk.txt
-      ru-ozon: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-ozon.txt
-      ru-wildberries: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-wildberries.txt
-      ru-mts: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-mts.txt
-      ru-analytics-cidr: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-analytics.txt
-      ru-banks-cidr: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-banks.txt
-      ru-cdn-cidr: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-cdn.txt
-      ru-payments-cidr: https://raw.githubusercontent.com/GrimbirdUsers/ru-routing-dat/main/data-geoip/ru-payments.txt
-    attribution: GrimbirdUsers/ru-routing-dat contributors
-    license:
-      spdx: NOASSERTION
-      redistribution_reviewed: true
-    freshness:
-      max_age_hours: 336
   - name: builtin/private-networks
     url: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
     input_type: builtin

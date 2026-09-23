@@ -131,11 +131,13 @@ the policy source of truth.
 | `meta` | server | domains | optional service route |
 | `github` | server | domains | optional service route |
 | `ai` | server | domains | optional service route |
+| `max-ip-check` | lite, server | exact IP-check hostnames from `fatyzzz/max-list` | opt-in route |
+| `max-vpndetect` | lite, server | exact connectivity-check hostnames from `fatyzzz/max-list` | opt-in route |
 | `ru-whitelist` | lite, server | domains | DIRECT; from `aireps/geosite:whitelist` and `kirilllavrov/RU-domain-list-for-whitelist:whitelist-ru` |
 | `ru-direct-geoip` | lite, server | CIDRs | DIRECT; from `hydraponique/roscomvpn-geoip:direct` and `:whitelist`, covering RU-service infrastructure outside `ru-geoip` |
 
 `itdoginfo/allow-domains`, `hydraponique/roscomvpn-geoip`, and
-`kirilllavrov/RU-domain-list-for-whitelist` are included in the source
+`kirilllavrov/RU-domain-list-for-whitelist`, and `fatyzzz/max-list` are included in the source
 registry under an SPDX `NOASSERTION` license status: their upstreams declare
 no verifiable redistribution license, so they are consumed with attribution
 under a maintainer decision rather than a confirmed grant. `ru` is currently
@@ -150,6 +152,37 @@ conflicting lite DIRECT category. Lite does not publish `blocked` rule-set
 artifacts (`blocked.srs`, `blocked-domain.mrs`, or a separate Xray category):
 after conflict resolution, the default proxy route provides the intended
 behavior without duplicating the server-only category in lite.
+
+## Optional MAX check-domain routes
+
+`fatyzzz/max-list` publishes two short lists used for IP and connectivity
+checks. They are not a complete list of MAX messenger endpoints. The release
+includes them as separate exact-host categories; neither is added to `ru` or
+the default example routes. A bare hostname matches that host only, not all
+its subdomains.
+
+To make these checks use a proxy, add the desired rule to your client config
+after `spy`/other deny rules and before `ru` DIRECT rules. On the server,
+place it after explicit blocked/deny rules and before `ru` DIRECT rules. This
+ordering matters for shared hosts such as `gstatic.com`. Use the proxy
+outbound or proxy group configured for your deployment:
+
+- Xray: add a `field` rule with `domain` set to
+  `ext:geosite-lite.dat:max-ip-check` or
+  `ext:geosite-lite.dat:max-vpndetect` and `outboundTag` set to `proxy`.
+  The server file is `geosite.dat`.
+- sing-box: add a remote binary `rule_set` with URL
+  `https://routing.akent.site/latest/sing-box/lite/max-ip-check.srs`
+  (or `max-vpndetect.srs`), then a route rule using that `rule_set` tag and
+  `outbound: proxy`. Replace `lite` with `server` on an egress node.
+- Mihomo: add an HTTP `rule-provider` with `behavior: domain`, `format: mrs`,
+  and URL `https://routing.akent.site/latest/mihomo/lite/max-ip-check-domain.mrs`
+  (or `max-vpndetect-domain.mrs`), then put
+  `RULE-SET,max-ip-check,proxy` (or `RULE-SET,max-vpndetect,proxy`) before
+  `RULE-SET,ru,DIRECT`. Replace `lite` with `server` on an egress node.
+
+Apply the two categories independently. Routing them through a proxy changes
+which IP these checks see; it does not by itself route all MAX traffic.
 
 ## Local development and builds
 

@@ -12,6 +12,7 @@ EXPECTED_SOURCES = {
     "GrimbirdUsers/ru-routing-dat",
     "runetfreedom/russia-v2ray-rules-dat",
     "jutsu-dev/ru-route-lists",
+    "fatyzzz/max-list",
     "Loyalsoldier/v2ray-rules-dat",
     "itdoginfo/allow-domains",
     "hydraponique/roscomvpn-geoip",
@@ -20,6 +21,23 @@ EXPECTED_SOURCES = {
 }
 
 UNVERIFIED_LICENSE_SOURCES = ()
+
+
+def test_max_list_release_assets_are_registered_for_domain_rules():
+    registry = load_registry(Path("config/sources.yaml"))
+    source = registry.resolve("fatyzzz/max-list")
+
+    assert source.layout == "release_assets"
+    assert source.input_type == "plain_text"
+    assert source.expected_categories == ("ip-check-formatted", "vpndetect")
+    assert source.category_locations["ip-check-formatted"] == (
+        "https://github.com/fatyzzz/max-list/releases/latest/download/"
+        "ip-check-formatted.txt",
+    )
+    assert source.category_locations["vpndetect"] == (
+        "https://github.com/fatyzzz/max-list/releases/latest/download/"
+        "vpndetect.txt",
+    )
 
 
 @pytest.mark.parametrize("source_name", UNVERIFIED_LICENSE_SOURCES)

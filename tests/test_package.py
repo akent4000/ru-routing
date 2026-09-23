@@ -195,9 +195,10 @@ _MIGRATION_AFFECTED_CATEGORY_KEYS = frozenset(
         "server:geoip-global",
     }
 )
-_CURRENT_POLICY_CONFIGS = PolicyConfigs(
-    source_registry_bytes=Path("config/sources.yaml").read_bytes(),
-    category_mapping_bytes=Path("config/categories.yaml").read_bytes(),
+# Migration grants refer to this exact past policy, not the live registry.
+_HISTORICAL_POLICY_CONFIGS = PolicyConfigs(
+    source_registry_bytes=(FIXTURES / "policy/4000626f/sources.yaml").read_bytes(),
+    category_mapping_bytes=(FIXTURES / "policy/4000626f/categories.yaml").read_bytes(),
 )
 _MIGRATION_THRESHOLDS = load_thresholds(Path("config/thresholds.yaml"))
 
@@ -272,8 +273,8 @@ def test_policy_fingerprint_is_stable_for_identical_input():
     assert left == right
 
 
-def test_approved_migrations_target_current_policy_fingerprint():
-    current = policy_fingerprint(_CURRENT_POLICY_CONFIGS)
+def test_approved_migrations_target_historical_policy_fingerprint():
+    current = policy_fingerprint(_HISTORICAL_POLICY_CONFIGS)
 
     assert all(
         migration.expected_current_policy_fingerprint == current
@@ -282,6 +283,13 @@ def test_approved_migrations_target_current_policy_fingerprint():
             *_MIGRATION_THRESHOLDS.category_scope_migrations,
         )
     )
+    live = policy_fingerprint(
+        PolicyConfigs(
+            source_registry_bytes=Path("config/sources.yaml").read_bytes(),
+            category_mapping_bytes=Path("config/categories.yaml").read_bytes(),
+        )
+    )
+    assert live != current
 
 
 # --- plan_release ---
@@ -303,7 +311,7 @@ def _source_removal_metadata(
     build = _build_without_ru_ip()
     return BuildMetadata(
         build=build,
-        policy_configs=_CURRENT_POLICY_CONFIGS,
+        policy_configs=_HISTORICAL_POLICY_CONFIGS,
         sources=tuple(_fetched_source(source_id) for source_id in current_source_ids),
         conflicts=build.conflicts,
         thresholds=_MIGRATION_THRESHOLDS,
@@ -476,6 +484,17 @@ def test_quarantine_still_checks_unrelated_category_anomaly():
         plan_release(metadata)
 
 
+def test_historical_migration_does_not_reset_anomalies_for_new_policy():
+    metadata = _source_removal_metadata(previous=_pre_removal_manifest())
+    current_policy = PolicyConfigs(
+        source_registry_bytes=Path("config/sources.yaml").read_bytes(),
+        category_mapping_bytes=Path("config/categories.yaml").read_bytes(),
+    )
+
+    with pytest.raises(AnomalyError, match=r"category .* changed by 100\.00%"):
+        plan_release(replace(metadata, policy_configs=current_policy))
+
+
 def test_plan_release_allows_exact_approved_source_removal_baseline_reset():
     metadata = _source_removal_metadata(previous=_pre_removal_manifest())
 
@@ -498,7 +517,7 @@ def test_plan_release_allows_exact_upstream_private_policy_migration():
     build = _build_with_upstream_private_domains()
     metadata = BuildMetadata(
         build=build,
-        policy_configs=_CURRENT_POLICY_CONFIGS,
+        policy_configs=_HISTORICAL_POLICY_CONFIGS,
         sources=(_fetched_source("aireps/geosite"),),
         conflicts=build.conflicts,
         thresholds=_MIGRATION_THRESHOLDS,

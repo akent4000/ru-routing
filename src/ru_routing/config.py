@@ -17,6 +17,7 @@ INITIAL_SOURCE_IDS = frozenset(
         "aireps/geosite",
         "runetfreedom/russia-v2ray-rules-dat",
         "jutsu-dev/ru-route-lists",
+        "fatyzzz/max-list",
         "Loyalsoldier/v2ray-rules-dat",
         "itdoginfo/allow-domains",
         "hydraponique/roscomvpn-geoip",
